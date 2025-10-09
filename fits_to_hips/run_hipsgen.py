@@ -51,6 +51,7 @@ def build_hipsgen_command(config):
     gen_checkcode = config.getboolean('Actions', 'gen_checkcode', fallback=True)
     gen_details = config.getboolean('Actions', 'gen_details', fallback=False)
     clean_index = config.getboolean('Actions', 'clean_index', fallback=False)
+    clean_fits = config.getboolean('Actions', 'clean_fits', fallback=False)
 
     # Build command - correct syntax: java -jar Hipsgen.jar param=value ... ACTION1 ACTION2
     cmd = [
@@ -133,7 +134,7 @@ def build_hipsgen_command(config):
     if actions:
         cmd.extend(actions)
 
-    return cmd, clean_index
+    return cmd, clean_index, clean_fits
 
 
 def run_hipsgen(cmd):
@@ -192,24 +193,43 @@ def main():
     config = read_config(config_file)
 
     # Build command
-    cmd, clean_index = build_hipsgen_command(config)
+    cmd, clean_index, clean_fits = build_hipsgen_command(config)
 
     # Run HipsGen
     return_code = run_hipsgen(cmd)
 
-    # If successful and clean_index is enabled, run CLEANINDEX
-    if return_code == 0 and clean_index:
-        print("\n" + "="*80)
-        print("Cleaning HpxFinder directory...")
-        print("="*80 + "\n")
-
-        # Get output directory from config
+    # Get common parameters for cleanup commands
+    if return_code == 0 and (clean_index or clean_fits):
         output_dir = config.get('Hipsgen', 'output_dir', fallback='').strip()
         output_id = config.get('Hipsgen', 'output_id', fallback='kd/diff')
         java_path = config.get('Environment', 'java_path', fallback='').strip()
         if not java_path:
             java_path = 'java'
         jar_file = config.get('Hipsgen', 'jar_file', fallback='Hipsgen.jar')
+
+    # If successful and clean_fits is enabled, run CLEANFITS
+    if return_code == 0 and clean_fits:
+        print("\n" + "="*80)
+        print("Cleaning FITS tiles...")
+        print("="*80 + "\n")
+
+        # Build CLEANFITS command
+        clean_cmd = [java_path, '-jar', jar_file]
+        if output_dir:
+            clean_cmd.append(f'out={output_dir}')
+        else:
+            # Use default output directory based on id
+            clean_cmd.append(f'id={output_id}')
+        clean_cmd.append('CLEANFITS')
+
+        # Run CLEANFITS
+        return_code = run_hipsgen(clean_cmd)
+
+    # If successful and clean_index is enabled, run CLEANINDEX
+    if return_code == 0 and clean_index:
+        print("\n" + "="*80)
+        print("Cleaning HpxFinder directory...")
+        print("="*80 + "\n")
 
         # Build CLEANINDEX command
         clean_cmd = [java_path, '-jar', jar_file]
