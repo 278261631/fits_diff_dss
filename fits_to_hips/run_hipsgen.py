@@ -129,11 +129,9 @@ def build_hipsgen_command(config):
     if gen_details:
         actions.append('DETAILS')
 
-    # If no actions specified, use defaults
-    if not actions:
-        actions = ['INDEX', 'TILES', 'PNG', 'MOC', 'CHECKCODE']
-
-    cmd.extend(actions)
+    # Only add actions if any are specified
+    if actions:
+        cmd.extend(actions)
 
     return cmd, clean_index
 
