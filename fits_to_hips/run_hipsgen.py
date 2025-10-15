@@ -3,6 +3,7 @@
 """
 HipsGen Runner
 Reads configuration from config.ini and executes HipsGen command
+Processes all FITS files in input directory, creating separate output folders
 """
 
 import os
@@ -10,6 +11,8 @@ import sys
 import subprocess
 import configparser
 from pathlib import Path
+import glob
+import shutil
 
 
 def read_config(config_file='config.ini'):
@@ -19,8 +22,39 @@ def read_config(config_file='config.ini'):
     return config
 
 
-def build_hipsgen_command(config):
-    """Build HipsGen command from configuration"""
+def find_fits_files(input_dir):
+    """Find all FITS files in input directory"""
+    fits_patterns = ['*.fits', '*.fit', '*.FITS', '*.FIT']
+    fits_files = []
+
+    input_path = Path(input_dir)
+    if not input_path.exists():
+        print(f"Warning: Input directory '{input_dir}' does not exist")
+        return []
+
+    for pattern in fits_patterns:
+        fits_files.extend(input_path.glob(pattern))
+
+    # Remove duplicates (case-insensitive) and sort by name
+    unique_files = {}
+    for f in fits_files:
+        key = str(f).lower()
+        if key not in unique_files:
+            unique_files[key] = f
+
+    fits_files = sorted(unique_files.values())
+
+    return fits_files
+
+
+def build_hipsgen_command(config, fits_file=None, output_subdir=None):
+    """Build HipsGen command from configuration
+
+    Args:
+        config: ConfigParser object
+        fits_file: Path to specific FITS file to process (optional)
+        output_subdir: Output subdirectory for this FITS file (optional)
+    """
 
     # Get Java path
     java_path = config.get('Environment', 'java_path', fallback='').strip()
@@ -39,6 +73,14 @@ def build_hipsgen_command(config):
     bitpix = config.get('Hipsgen', 'bitpix', fallback='').strip()
     tile_format = config.get('Hipsgen', 'format', fallback='').strip()
     additional_params = config.get('Hipsgen', 'additional_params', fallback='').strip()
+
+    # Override input_dir if specific FITS file is provided
+    if fits_file:
+        input_dir = str(fits_file)
+
+    # Override output_dir if output_subdir is provided
+    if output_subdir:
+        output_dir = str(output_subdir)
 
     # Get generation options
     gen_fits = config.getboolean('Generation', 'gen_fits', fallback=True)
@@ -176,6 +218,66 @@ def run_hipsgen(cmd):
         return 1
 
 
+def process_single_fits(config, fits_file, output_base_dir, file_index, total_files):
+    """Process a single FITS file
+
+    Args:
+        config: ConfigParser object
+        fits_file: Path to FITS file
+        output_base_dir: Base output directory
+        file_index: Current file index (1-based)
+        total_files: Total number of files
+
+    Returns:
+        0 if successful, non-zero otherwise
+    """
+    fits_name = fits_file.stem  # Filename without extension
+
+    print("\n" + "="*80)
+    print(f"Processing file {file_index}/{total_files}: {fits_file.name}")
+    print("="*80 + "\n")
+
+    # Create output subdirectory
+    output_subdir = output_base_dir / fits_name
+    output_subdir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Input file: {fits_file}")
+    print(f"Output directory: {output_subdir}\n")
+
+    # Build command for this FITS file
+    cmd, clean_index, clean_fits = build_hipsgen_command(config, fits_file, output_subdir)
+
+    # Run HipsGen
+    return_code = run_hipsgen(cmd)
+
+    # Get common parameters for cleanup commands
+    if return_code == 0 and (clean_index or clean_fits):
+        java_path = config.get('Environment', 'java_path', fallback='').strip()
+        if not java_path:
+            java_path = 'java'
+        jar_file = config.get('Hipsgen', 'jar_file', fallback='Hipsgen.jar')
+
+    # If successful and clean_fits is enabled, run CLEANFITS
+    if return_code == 0 and clean_fits:
+        print("\n" + "="*80)
+        print("Cleaning FITS tiles...")
+        print("="*80 + "\n")
+
+        clean_cmd = [java_path, '-jar', jar_file, f'out={output_subdir}', 'CLEANFITS']
+        return_code = run_hipsgen(clean_cmd)
+
+    # If successful and clean_index is enabled, run CLEANINDEX
+    if return_code == 0 and clean_index:
+        print("\n" + "="*80)
+        print("Cleaning HpxFinder directory...")
+        print("="*80 + "\n")
+
+        clean_cmd = [java_path, '-jar', jar_file, f'out={output_subdir}', 'CLEANINDEX']
+        return_code = run_hipsgen(clean_cmd)
+
+    return return_code
+
+
 def main():
     """Main function"""
     # Get script directory
@@ -192,58 +294,57 @@ def main():
     print("Reading configuration from config.ini...")
     config = read_config(config_file)
 
-    # Build command
-    cmd, clean_index, clean_fits = build_hipsgen_command(config)
+    # Get input directory
+    input_dir = config.get('Hipsgen', 'input_dir', fallback='data')
 
-    # Run HipsGen
-    return_code = run_hipsgen(cmd)
+    # Find all FITS files
+    print(f"\nSearching for FITS files in: {input_dir}")
+    fits_files = find_fits_files(input_dir)
 
-    # Get common parameters for cleanup commands
-    if return_code == 0 and (clean_index or clean_fits):
-        output_dir = config.get('Hipsgen', 'output_dir', fallback='').strip()
-        output_id = config.get('Hipsgen', 'output_id', fallback='kd/diff')
-        java_path = config.get('Environment', 'java_path', fallback='').strip()
-        if not java_path:
-            java_path = 'java'
-        jar_file = config.get('Hipsgen', 'jar_file', fallback='Hipsgen.jar')
+    if not fits_files:
+        print(f"Error: No FITS files found in '{input_dir}'")
+        return 1
 
-    # If successful and clean_fits is enabled, run CLEANFITS
-    if return_code == 0 and clean_fits:
-        print("\n" + "="*80)
-        print("Cleaning FITS tiles...")
-        print("="*80 + "\n")
+    print(f"Found {len(fits_files)} FITS file(s):")
+    for i, fits_file in enumerate(fits_files, 1):
+        print(f"  {i}. {fits_file.name}")
 
-        # Build CLEANFITS command
-        clean_cmd = [java_path, '-jar', jar_file]
-        if output_dir:
-            clean_cmd.append(f'out={output_dir}')
+    # Create base output directory
+    output_base_dir = script_dir / 'output'
+    output_base_dir.mkdir(exist_ok=True)
+    print(f"\nOutput base directory: {output_base_dir}")
+
+    # Process each FITS file
+    success_count = 0
+    failed_files = []
+
+    for i, fits_file in enumerate(fits_files, 1):
+        return_code = process_single_fits(config, fits_file, output_base_dir, i, len(fits_files))
+
+        if return_code == 0:
+            success_count += 1
+            print(f"\n✓ Successfully processed: {fits_file.name}")
         else:
-            # Use default output directory based on id
-            clean_cmd.append(f'id={output_id}')
-        clean_cmd.append('CLEANFITS')
+            failed_files.append(fits_file.name)
+            print(f"\n✗ Failed to process: {fits_file.name}")
 
-        # Run CLEANFITS
-        return_code = run_hipsgen(clean_cmd)
+    # Print summary
+    print("\n" + "="*80)
+    print("PROCESSING SUMMARY")
+    print("="*80)
+    print(f"Total files: {len(fits_files)}")
+    print(f"Successful: {success_count}")
+    print(f"Failed: {len(failed_files)}")
 
-    # If successful and clean_index is enabled, run CLEANINDEX
-    if return_code == 0 and clean_index:
-        print("\n" + "="*80)
-        print("Cleaning HpxFinder directory...")
-        print("="*80 + "\n")
+    if failed_files:
+        print("\nFailed files:")
+        for filename in failed_files:
+            print(f"  - {filename}")
 
-        # Build CLEANINDEX command
-        clean_cmd = [java_path, '-jar', jar_file]
-        if output_dir:
-            clean_cmd.append(f'out={output_dir}')
-        else:
-            # Use default output directory based on id
-            clean_cmd.append(f'id={output_id}')
-        clean_cmd.append('CLEANINDEX')
+    print(f"\nAll results saved to: {output_base_dir}")
+    print("="*80 + "\n")
 
-        # Run CLEANINDEX
-        return_code = run_hipsgen(clean_cmd)
-
-    return return_code
+    return 0 if success_count == len(fits_files) else 1
 
 
 if __name__ == '__main__':
