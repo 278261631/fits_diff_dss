@@ -381,83 +381,184 @@ class PSFMatcher:
         plt.close()
 
 
+def find_sci_data_dirs(data_dir):
+    """
+    Find all science data directories
+
+    Parameters:
+    -----------
+    data_dir : Path
+        Base data directory
+
+    Returns:
+    --------
+    sci_dirs : list
+        List of science data directories
+    """
+    sci_dirs = []
+
+    # Look for directories starting with 'sci_data'
+    for item in data_dir.iterdir():
+        if item.is_dir() and item.name.startswith('sci_data'):
+            sci_dirs.append(item)
+
+    # Sort by name
+    sci_dirs = sorted(sci_dirs)
+
+    return sci_dirs
+
+
+def process_single_pair(sci_file, ref_file, output_dir):
+    """
+    Process a single science-reference image pair
+
+    Parameters:
+    -----------
+    sci_file : Path
+        Science image file
+    ref_file : Path
+        Reference image file
+    output_dir : Path
+        Output directory for this pair
+
+    Returns:
+    --------
+    success : bool
+        True if processing succeeded
+    """
+    try:
+        print(f"\nProcessing: {sci_file.name}")
+
+        # Initialize PSF matcher
+        matcher = PSFMatcher(sci_file, ref_file, output_dir)
+
+        # Load images
+        matcher.load_images()
+
+        # PSF matching
+        matcher.match_psf()
+
+        # Flux normalization
+        matcher.normalize_flux(method='median')
+
+        # Image subtraction
+        matcher.subtract_images()
+
+        # Extract photometry
+        sources = matcher.extract_photometry(threshold=5.0, fwhm=3.0)
+
+        # Save results
+        matcher.save_results()
+
+        print(f"✓ Successfully processed: {sci_file.name}")
+        return True
+
+    except Exception as e:
+        print(f"✗ Failed to process {sci_file.name}: {str(e)}")
+        return False
+
+
 def main():
     """Main function"""
     # Set paths
     script_dir = Path(__file__).parent
     data_dir = script_dir.parent / 'data_psf'
-    
-    sci_dir = data_dir / 'sci_data'
     ref_dir = data_dir / 'dss_data'
-    output_dir = script_dir / 'output'
-    
-    # Find matching files
-    sci_files = list(sci_dir.glob('Npix*.jpg')) + list(sci_dir.glob('Npix*.fits'))
-    ref_files = list(ref_dir.glob('Npix*.jpg')) + list(ref_dir.glob('Npix*.fits'))
-    
-    if not sci_files:
-        print(f"Error: No science images found in {sci_dir}")
+    output_base_dir = script_dir / 'output'
+
+    # Check if reference directory exists
+    if not ref_dir.exists():
+        print(f"Error: Reference directory not found: {ref_dir}")
         return 1
-    
-    if not ref_files:
-        print(f"Error: No reference images found in {ref_dir}")
+
+    # Find all science data directories
+    print("Searching for science data directories...")
+    sci_dirs = find_sci_data_dirs(data_dir)
+
+    if not sci_dirs:
+        print(f"Error: No science data directories found in {data_dir}")
+        print("Looking for directories starting with 'sci_data'")
         return 1
-    
-    print("="*80)
-    print("PSF Matching and Photometry Extraction")
-    print("="*80)
-    print(f"Science images: {len(sci_files)}")
-    print(f"Reference images: {len(ref_files)}")
-    print("="*80)
-    
-    # Process each pair
-    for sci_file in sci_files:
-        # Find matching reference file
-        ref_file = ref_dir / sci_file.name
-        if not ref_file.exists():
-            # Try different extensions
-            ref_file = ref_dir / (sci_file.stem + '.jpg')
-            if not ref_file.exists():
-                ref_file = ref_dir / (sci_file.stem + '.fits')
-        
-        if not ref_file.exists():
-            print(f"Warning: No matching reference file for {sci_file.name}")
-            continue
-        
-        print(f"\nProcessing: {sci_file.name}")
-        
-        # Create output directory for this pair
-        pair_output = output_dir / sci_file.stem
-        
-        # Initialize PSF matcher
-        matcher = PSFMatcher(sci_file, ref_file, pair_output)
-        
-        # Load images
-        matcher.load_images()
-        
-        # PSF matching
-        matcher.match_psf()
-        
-        # Flux normalization
-        matcher.normalize_flux(method='median')
-        
-        # Image subtraction
-        matcher.subtract_images()
-        
-        # Extract photometry
-        sources = matcher.extract_photometry(threshold=5.0, fwhm=3.0)
-        
-        # Save results
-        matcher.save_results()
-        
-        print(f"Completed processing: {sci_file.name}")
-    
+
+    print(f"Found {len(sci_dirs)} science data director(ies):")
+    for i, sci_dir in enumerate(sci_dirs, 1):
+        print(f"  {i}. {sci_dir.name}")
+
+    # Create base output directory
+    output_base_dir.mkdir(exist_ok=True)
+    print(f"\nOutput base directory: {output_base_dir}")
+
     print("\n" + "="*80)
-    print("All processing completed!")
-    print(f"Results saved to: {output_dir}")
+    print("PSF Matching and Photometry Extraction - Batch Processing")
     print("="*80)
-    
-    return 0
+
+    # Process each science data directory
+    total_processed = 0
+    total_success = 0
+    total_failed = 0
+    failed_files = []
+
+    for dir_index, sci_dir in enumerate(sci_dirs, 1):
+        print("\n" + "="*80)
+        print(f"Processing directory {dir_index}/{len(sci_dirs)}: {sci_dir.name}")
+        print("="*80)
+
+        # Find science images in this directory
+        sci_files = list(sci_dir.glob('Npix*.jpg')) + list(sci_dir.glob('Npix*.fits'))
+
+        if not sci_files:
+            print(f"Warning: No science images found in {sci_dir.name}")
+            continue
+
+        print(f"Found {len(sci_files)} science image(s) in {sci_dir.name}")
+
+        # Process each science image
+        for sci_file in sci_files:
+            # Find matching reference file
+            ref_file = ref_dir / sci_file.name
+            if not ref_file.exists():
+                # Try different extensions
+                ref_file = ref_dir / (sci_file.stem + '.jpg')
+                if not ref_file.exists():
+                    ref_file = ref_dir / (sci_file.stem + '.fits')
+
+            if not ref_file.exists():
+                print(f"Warning: No matching reference file for {sci_file.name}")
+                failed_files.append(f"{sci_dir.name}/{sci_file.name}")
+                total_failed += 1
+                continue
+
+            # Create output directory: output/sci_data_a/Npix512845/
+            pair_output = output_base_dir / sci_dir.name / sci_file.stem
+
+            # Process this pair
+            total_processed += 1
+            success = process_single_pair(sci_file, ref_file, pair_output)
+
+            if success:
+                total_success += 1
+            else:
+                total_failed += 1
+                failed_files.append(f"{sci_dir.name}/{sci_file.name}")
+
+    # Print summary
+    print("\n" + "="*80)
+    print("PROCESSING SUMMARY")
+    print("="*80)
+    print(f"Science data directories: {len(sci_dirs)}")
+    print(f"Total image pairs processed: {total_processed}")
+    print(f"Successful: {total_success}")
+    print(f"Failed: {total_failed}")
+
+    if failed_files:
+        print("\nFailed files:")
+        for filename in failed_files:
+            print(f"  - {filename}")
+
+    print(f"\nAll results saved to: {output_base_dir}")
+    print("="*80 + "\n")
+
+    return 0 if total_failed == 0 else 1
 
 
 if __name__ == '__main__':
