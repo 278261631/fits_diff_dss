@@ -200,7 +200,7 @@ class PhotometryViewer:
         """Create user interface"""
         # Create subplots
         gs = self.fig.add_gridspec(2, 2, width_ratios=[1, 1], height_ratios=[1, 1],
-                                   hspace=0.3, wspace=0.3)
+                                   hspace=0.3, wspace=0.3, top=0.92, bottom=0.08)
 
         # Image axis (left, spans both rows)
         self.ax_image = self.fig.add_subplot(gs[:, 0])
@@ -218,6 +218,11 @@ class PhotometryViewer:
         # Add title
         self.fig.suptitle('Photometry Viewer - Click on a source to view its light curve',
                          fontsize=12, fontweight='bold')
+
+        # Add button for showing all sources
+        ax_button = plt.axes([0.4, 0.01, 0.2, 0.04])
+        self.btn_all = Button(ax_button, 'Show All Sources')
+        self.btn_all.on_clicked(self.show_all_sources)
 
 
     def display_reference_image(self):
@@ -321,6 +326,87 @@ class PhotometryViewer:
         self.ax_mag.axis('off')
 
         self.fig.canvas.draw()
+
+    def show_all_sources(self, event=None):
+        """Show all sources' light curves in a new window"""
+        if not self.current_tile or not self.phot_data.datasets:
+            print("No data to display")
+            return
+
+        print("\nGenerating all sources plot...")
+
+        # Get all sources from first dataset
+        first_dataset = sorted(self.phot_data.datasets.keys())[0]
+        if self.current_tile not in self.phot_data.datasets[first_dataset]:
+            print("No sources found in current tile")
+            return
+
+        sources = self.phot_data.datasets[first_dataset][self.current_tile]
+        n_sources = len(sources)
+
+        print(f"Processing {n_sources} sources...")
+
+        # Create new figure
+        fig_all = plt.figure(figsize=(14, 8))
+        fig_all.canvas.manager.set_window_title('All Sources Light Curves')
+
+        # Create subplots
+        ax_flux_all = fig_all.add_subplot(211)
+        ax_mag_all = fig_all.add_subplot(212)
+
+        # Get dataset names
+        dataset_names = sorted(self.phot_data.datasets.keys())
+        n_datasets = len(dataset_names)
+        x_indices = range(n_datasets)
+
+        # Plot each source
+        n_plotted = 0
+        n_skipped = 0
+        for i, source in enumerate(sources):
+            light_curve = self.phot_data.get_light_curve(
+                source['x'], source['y'], self.current_tile
+            )
+
+            # Only plot if we have data for all datasets
+            if light_curve and len(light_curve) == n_datasets:
+                fluxes = [lc['flux'] for lc in light_curve]
+                mags = [lc['mag'] for lc in light_curve]
+
+                # Plot with transparency
+                ax_flux_all.plot(x_indices, fluxes, 'o-', alpha=0.3, linewidth=0.5, markersize=2)
+                ax_mag_all.plot(x_indices, mags, 'o-', alpha=0.3, linewidth=0.5, markersize=2)
+                n_plotted += 1
+            else:
+                n_skipped += 1
+
+        # Format flux plot
+        ax_flux_all.set_ylabel('Flux', fontsize=12)
+        title = f'All Sources Light Curves - {self.current_tile}\n'
+        title += f'({n_plotted} sources with complete data'
+        if n_skipped > 0:
+            title += f', {n_skipped} skipped due to incomplete data'
+        title += ')'
+        ax_flux_all.set_title(title, fontsize=13, fontweight='bold')
+        ax_flux_all.grid(True, alpha=0.3)
+        ax_flux_all.set_xticks(x_indices)
+        ax_flux_all.set_xticklabels([])
+
+        # Format magnitude plot
+        ax_mag_all.set_xlabel('Dataset', fontsize=12)
+        ax_mag_all.set_ylabel('Magnitude', fontsize=12)
+        ax_mag_all.invert_yaxis()
+        ax_mag_all.grid(True, alpha=0.3)
+        ax_mag_all.set_xticks(x_indices)
+        ax_mag_all.set_xticklabels(dataset_names, rotation=45, ha='right', fontsize=10)
+
+        fig_all.tight_layout()
+
+        print(f"✓ Plotted {n_plotted} sources with complete light curves")
+        if n_skipped > 0:
+            print(f"  Skipped {n_skipped} sources with incomplete data")
+        print("Close the window to return to main viewer")
+
+        plt.show()
 
     def show(self):
         """Show the viewer"""
