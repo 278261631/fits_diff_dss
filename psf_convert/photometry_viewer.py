@@ -10,7 +10,7 @@ import numpy as np
 from pathlib import Path
 from PIL import Image
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Button
+from matplotlib.widgets import Button, RadioButtons
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -20,8 +20,8 @@ class PhotometryData:
     
     def __init__(self):
         self.datasets = {}  # {dataset_name: {tile_name: data}}
-        self.ref_image = None
-        self.ref_image_path = None
+        self.ref_images = {}  # {tile_name: image_array}
+        self.sci_images = {}  # {dataset_name: {tile_name: image_array}}
         
     def load_photometry_file(self, filepath):
         """Load a single photometry file"""
@@ -65,40 +65,69 @@ class PhotometryData:
                             continue
         return data
     
-    def load_all_data(self, output_dir, ref_image_path):
+    def load_all_data(self, output_dir, ref_image_dir, sci_image_dir):
         """Load all photometry data from output directory"""
         output_path = Path(output_dir)
-        self.ref_image_path = Path(ref_image_path)
-        
-        # Load reference image
-        if self.ref_image_path.suffix.lower() in ['.jpg', '.jpeg', '.png']:
-            self.ref_image = np.array(Image.open(self.ref_image_path).convert('L'))
-        else:
-            from astropy.io import fits
-            with fits.open(self.ref_image_path) as hdul:
-                self.ref_image = hdul[0].data
-        
+        self.ref_image_dir = Path(ref_image_dir)
+        self.sci_image_dir = Path(sci_image_dir)
+
         # Find all sci_data directories
         for sci_dir in output_path.iterdir():
             if not sci_dir.is_dir() or not sci_dir.name.startswith('sci_data'):
                 continue
-            
+
             dataset_name = sci_dir.name
             self.datasets[dataset_name] = {}
-            
+            self.sci_images[dataset_name] = {}
+
             # Find all tile directories
             for tile_dir in sci_dir.iterdir():
                 if not tile_dir.is_dir():
                     continue
-                
+
                 tile_name = tile_dir.name
                 phot_file = tile_dir / 'photometry.txt'
-                
+
                 if phot_file.exists():
                     data = self.load_photometry_file(phot_file)
                     if data:
                         self.datasets[dataset_name][tile_name] = data
-        
+
+                        # Load reference image for this tile if not already loaded
+                        if tile_name not in self.ref_images:
+                            ref_img_path = self.ref_image_dir / f'{tile_name}.jpg'
+                            if ref_img_path.exists():
+                                self.ref_images[tile_name] = np.array(Image.open(ref_img_path).convert('L'))
+                            else:
+                                # Try other extensions
+                                for ext in ['.png', '.jpeg', '.fits']:
+                                    ref_img_path = self.ref_image_dir / f'{tile_name}{ext}'
+                                    if ref_img_path.exists():
+                                        if ext == '.fits':
+                                            from astropy.io import fits
+                                            with fits.open(ref_img_path) as hdul:
+                                                self.ref_images[tile_name] = hdul[0].data
+                                        else:
+                                            self.ref_images[tile_name] = np.array(Image.open(ref_img_path).convert('L'))
+                                        break
+
+                        # Load science image for this dataset and tile
+                        sci_img_path = self.sci_image_dir / dataset_name / f'{tile_name}.jpg'
+                        if sci_img_path.exists():
+                            self.sci_images[dataset_name][tile_name] = np.array(Image.open(sci_img_path).convert('L'))
+                        else:
+                            # Try other extensions
+                            for ext in ['.png', '.jpeg', '.fits']:
+                                sci_img_path = self.sci_image_dir / dataset_name / f'{tile_name}{ext}'
+                                if sci_img_path.exists():
+                                    if ext == '.fits':
+                                        from astropy.io import fits
+                                        with fits.open(sci_img_path) as hdul:
+                                            self.sci_images[dataset_name][tile_name] = hdul[0].data
+                                    else:
+                                        self.sci_images[dataset_name][tile_name] = np.array(Image.open(sci_img_path).convert('L'))
+                                    break
+
         return len(self.datasets) > 0
     
     def find_nearest_source(self, x, y, dataset_name, tile_name, max_distance=10):
@@ -144,7 +173,7 @@ class PhotometryData:
 class PhotometryViewer:
     """Interactive photometry viewer using matplotlib"""
 
-    def __init__(self, output_dir, ref_image_path):
+    def __init__(self, output_dir, ref_image_dir, sci_image_dir):
         """
         Initialize viewer
 
@@ -152,16 +181,19 @@ class PhotometryViewer:
         -----------
         output_dir : str or Path
             Output directory containing photometry data
-        ref_image_path : str or Path
-            Path to DSS reference image
+        ref_image_dir : str or Path
+            Directory containing DSS reference images
+        sci_image_dir : str or Path
+            Directory containing science images
         """
         self.phot_data = PhotometryData()
         self.current_tile = None
+        self.current_image_type = 'dss'  # 'dss' or dataset name
         self.selected_source = None
 
         # Load data
         print("Loading data...")
-        success = self.phot_data.load_all_data(output_dir, ref_image_path)
+        success = self.phot_data.load_all_data(output_dir, ref_image_dir, sci_image_dir)
 
         if not success:
             print("Error: No photometry data found!")
@@ -178,6 +210,9 @@ class PhotometryViewer:
             return
 
         self.current_tile = self.tiles[0]
+
+        # Get available datasets for image switching
+        self.datasets = sorted(self.phot_data.datasets.keys())
 
         # Print summary
         n_datasets = len(self.phot_data.datasets)
@@ -200,7 +235,7 @@ class PhotometryViewer:
         """Create user interface"""
         # Create subplots
         gs = self.fig.add_gridspec(2, 2, width_ratios=[1, 1], height_ratios=[1, 1],
-                                   hspace=0.3, wspace=0.3, top=0.92, bottom=0.08)
+                                   hspace=0.3, wspace=0.3, top=0.92, bottom=0.08, left=0.15)
 
         # Image axis (left, spans both rows)
         self.ax_image = self.fig.add_subplot(gs[:, 0])
@@ -219,6 +254,24 @@ class PhotometryViewer:
         self.fig.suptitle('Photometry Viewer - Click on a source to view its light curve',
                          fontsize=12, fontweight='bold')
 
+        # Add tile selector (radio buttons) if multiple tiles
+        if len(self.tiles) > 1:
+            ax_radio_tile = plt.axes([0.01, 0.5, 0.12, 0.15])
+            self.radio_tile = RadioButtons(ax_radio_tile, self.tiles, active=0)
+            self.radio_tile.on_clicked(self.on_tile_changed)
+            # Add label
+            ax_radio_tile.text(0.5, 1.1, 'Select Tile:', transform=ax_radio_tile.transAxes,
+                         ha='center', fontsize=10, fontweight='bold')
+
+        # Add image selector (radio buttons)
+        image_options = ['DSS (Reference)'] + self.datasets
+        ax_radio_img = plt.axes([0.01, 0.15, 0.12, 0.25])
+        self.radio_img = RadioButtons(ax_radio_img, image_options, active=0)
+        self.radio_img.on_clicked(self.on_image_changed)
+        # Add label
+        ax_radio_img.text(0.5, 1.05, 'Select Image:', transform=ax_radio_img.transAxes,
+                         ha='center', fontsize=10, fontweight='bold')
+
         # Add button for showing all sources
         ax_button = plt.axes([0.4, 0.01, 0.2, 0.04])
         self.btn_all = Button(ax_button, 'Show All Sources')
@@ -226,20 +279,37 @@ class PhotometryViewer:
 
 
     def display_reference_image(self):
-        """Display reference image with sources"""
-        if self.phot_data.ref_image is None:
-            return
-
+        """Display current image (DSS or science) with sources"""
         self.ax_image.clear()
 
-        # Display image
-        self.ax_image.imshow(self.phot_data.ref_image, cmap='gray', origin='lower')
+        # Determine which image to display
+        if self.current_image_type == 'dss':
+            if self.current_tile not in self.phot_data.ref_images:
+                return
+            image = self.phot_data.ref_images[self.current_tile]
+            title = f'DSS Reference Image - {self.current_tile}'
+        else:
+            # Display science image
+            dataset_name = self.current_image_type
+            if dataset_name not in self.phot_data.sci_images:
+                return
+            if self.current_tile not in self.phot_data.sci_images[dataset_name]:
+                return
+            image = self.phot_data.sci_images[dataset_name][self.current_tile]
+            title = f'{dataset_name} - {self.current_tile}'
 
-        # Overlay sources from first dataset
+        # Display image
+        self.ax_image.imshow(image, cmap='gray', origin='lower')
+
+        # Overlay sources from first dataset (or current dataset if viewing science image)
         if self.current_tile and self.phot_data.datasets:
-            first_dataset = sorted(self.phot_data.datasets.keys())[0]
-            if self.current_tile in self.phot_data.datasets[first_dataset]:
-                sources = self.phot_data.datasets[first_dataset][self.current_tile]
+            if self.current_image_type == 'dss':
+                source_dataset = sorted(self.phot_data.datasets.keys())[0]
+            else:
+                source_dataset = self.current_image_type
+
+            if source_dataset in self.phot_data.datasets and self.current_tile in self.phot_data.datasets[source_dataset]:
+                sources = self.phot_data.datasets[source_dataset][self.current_tile]
                 x_coords = [s['x'] for s in sources]
                 y_coords = [s['y'] for s in sources]
                 self.ax_image.scatter(x_coords, y_coords, c='red', s=50, alpha=0.5,
@@ -247,9 +317,31 @@ class PhotometryViewer:
 
         self.ax_image.set_xlabel('X (pixels)', fontsize=10)
         self.ax_image.set_ylabel('Y (pixels)', fontsize=10)
-        self.ax_image.set_title(f'DSS Reference Image - {self.current_tile}', fontsize=11)
+        self.ax_image.set_title(title, fontsize=11)
 
         self.fig.canvas.draw()
+
+    def on_tile_changed(self, label):
+        """Handle tile selection change"""
+        self.current_tile = label
+        print(f"\nSwitched to tile: {self.current_tile}")
+
+        # Update display
+        self.display_reference_image()
+        self.clear_light_curve()
+        self.selected_source = None
+
+    def on_image_changed(self, label):
+        """Handle image selection change"""
+        if label == 'DSS (Reference)':
+            self.current_image_type = 'dss'
+            print(f"\nSwitched to DSS reference image")
+        else:
+            self.current_image_type = label
+            print(f"\nSwitched to {label} image")
+
+        # Update display
+        self.display_reference_image()
 
     def on_click(self, event):
         """Handle mouse click on image"""
@@ -418,7 +510,8 @@ def main():
     # Set paths
     script_dir = Path(__file__).parent
     output_dir = script_dir / 'output'
-    ref_image = script_dir.parent / 'data_psf' / 'dss_data' / 'Npix512845.jpg'
+    ref_image_dir = script_dir.parent / 'data_psf' / 'dss_data'
+    sci_image_dir = script_dir.parent / 'data_psf'
 
     # Check if paths exist
     if not output_dir.exists():
@@ -426,24 +519,33 @@ def main():
         print("Please run psf_matching_photometry.py first to generate data.")
         return 1
 
-    if not ref_image.exists():
-        print(f"Error: Reference image not found: {ref_image}")
+    if not ref_image_dir.exists():
+        print(f"Error: Reference image directory not found: {ref_image_dir}")
         print("Please check the data_psf/dss_data/ directory.")
+        return 1
+
+    if not sci_image_dir.exists():
+        print(f"Error: Science image directory not found: {sci_image_dir}")
+        print("Please check the data_psf/ directory.")
         return 1
 
     print("="*80)
     print("Photometry Viewer")
     print("="*80)
     print(f"Output directory: {output_dir}")
-    print(f"Reference image: {ref_image}")
+    print(f"Reference image directory: {ref_image_dir}")
+    print(f"Science image directory: {sci_image_dir}")
     print()
 
     # Create and show viewer
-    viewer = PhotometryViewer(output_dir, ref_image)
+    viewer = PhotometryViewer(output_dir, ref_image_dir, sci_image_dir)
 
     print()
     print("Instructions:")
+    print("  - Use 'Select Tile' radio buttons to switch between tiles (if multiple)")
+    print("  - Use 'Select Image' radio buttons to switch between DSS and science images")
     print("  - Click on any red circle (source) to view its light curve")
+    print("  - Click 'Show All Sources' button to see all sources in current tile")
     print("  - The light curve shows flux and magnitude across all datasets")
     print("  - Close the window to exit")
     print()
