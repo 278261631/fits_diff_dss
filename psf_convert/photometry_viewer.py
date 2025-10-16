@@ -14,6 +14,174 @@ from matplotlib.widgets import Button, RadioButtons
 import warnings
 warnings.filterwarnings('ignore')
 
+# Import analysis libraries
+from scipy import stats
+from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
+from scipy.spatial.distance import euclidean
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+
+# Try to import DTW library
+try:
+    from dtaidistance import dtw
+    DTW_AVAILABLE = True
+except ImportError:
+    DTW_AVAILABLE = False
+    print("Warning: dtaidistance not available. DTW analysis will be disabled.")
+
+
+class TrendAnalyzer:
+    """Class for analyzing light curve trends"""
+
+    def __init__(self):
+        self.methods = {
+            'None': 'No classification',
+            'Z-Score': 'Z-score outlier detection',
+            'Clustering': 'Hierarchical clustering',
+            'PCA': 'Principal Component Analysis',
+            'Change Point': 'Change point detection',
+            'DTW': 'Dynamic Time Warping clustering'
+        }
+
+    def analyze(self, light_curves, method='None', n_clusters=3):
+        """
+        Analyze light curves and return classification labels
+
+        Parameters:
+        -----------
+        light_curves : list of arrays
+            List of light curves (each is array of flux values)
+        method : str
+            Analysis method to use
+        n_clusters : int
+            Number of clusters for clustering methods
+
+        Returns:
+        --------
+        labels : array
+            Classification label for each light curve
+        colors : list
+            Color for each class
+        """
+        if method == 'None' or len(light_curves) == 0:
+            return np.zeros(len(light_curves), dtype=int), ['blue']
+
+        # Convert to numpy array
+        data = np.array(light_curves)
+        n_sources = len(data)
+
+        if method == 'Z-Score':
+            return self._zscore_analysis(data)
+        elif method == 'Clustering':
+            return self._hierarchical_clustering(data, n_clusters)
+        elif method == 'PCA':
+            return self._pca_analysis(data, n_clusters)
+        elif method == 'Change Point':
+            return self._change_point_analysis(data)
+        elif method == 'DTW':
+            return self._dtw_clustering(data, n_clusters)
+        else:
+            return np.zeros(n_sources, dtype=int), ['blue']
+
+    def _zscore_analysis(self, data):
+        """Z-score based outlier detection"""
+        # Calculate variance for each light curve
+        variances = np.var(data, axis=1)
+
+        # Calculate z-scores
+        z_scores = np.abs(stats.zscore(variances))
+
+        # Classify: 0=normal, 1=moderate variation, 2=high variation
+        labels = np.zeros(len(data), dtype=int)
+        labels[z_scores > 1] = 1
+        labels[z_scores > 2] = 2
+
+        colors = ['blue', 'orange', 'red']
+        return labels, colors
+
+    def _hierarchical_clustering(self, data, n_clusters):
+        """Hierarchical clustering"""
+        # Standardize data
+        scaler = StandardScaler()
+        data_scaled = scaler.fit_transform(data)
+
+        # Perform hierarchical clustering
+        linkage_matrix = linkage(data_scaled, method='ward')
+        labels = fcluster(linkage_matrix, n_clusters, criterion='maxclust') - 1
+
+        # Generate colors
+        colors = plt.cm.tab10(np.linspace(0, 1, n_clusters))
+
+        return labels, colors
+
+    def _pca_analysis(self, data, n_clusters):
+        """PCA-based clustering"""
+        # Standardize data
+        scaler = StandardScaler()
+        data_scaled = scaler.fit_transform(data)
+
+        # Apply PCA
+        pca = PCA(n_components=min(2, data.shape[1]))
+        data_pca = pca.fit_transform(data_scaled)
+
+        # K-means clustering on PCA components
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        labels = kmeans.fit_predict(data_pca)
+
+        # Generate colors
+        colors = plt.cm.tab10(np.linspace(0, 1, n_clusters))
+
+        return labels, colors
+
+    def _change_point_analysis(self, data):
+        """Change point detection"""
+        labels = np.zeros(len(data), dtype=int)
+
+        for i, curve in enumerate(data):
+            # Calculate differences between consecutive points
+            diffs = np.abs(np.diff(curve))
+
+            # Detect significant changes
+            threshold = np.mean(diffs) + 2 * np.std(diffs)
+            n_changes = np.sum(diffs > threshold)
+
+            # Classify: 0=stable, 1=moderate changes, 2=many changes
+            if n_changes == 0:
+                labels[i] = 0
+            elif n_changes <= 2:
+                labels[i] = 1
+            else:
+                labels[i] = 2
+
+        colors = ['blue', 'orange', 'red']
+        return labels, colors
+
+    def _dtw_clustering(self, data, n_clusters):
+        """DTW-based clustering"""
+        if not DTW_AVAILABLE:
+            print("DTW library not available, using hierarchical clustering instead")
+            return self._hierarchical_clustering(data, n_clusters)
+
+        n_sources = len(data)
+
+        # Calculate DTW distance matrix
+        dist_matrix = np.zeros((n_sources, n_sources))
+        for i in range(n_sources):
+            for j in range(i+1, n_sources):
+                distance = dtw.distance(data[i], data[j])
+                dist_matrix[i, j] = distance
+                dist_matrix[j, i] = distance
+
+        # Perform hierarchical clustering on distance matrix
+        linkage_matrix = linkage(dist_matrix, method='average')
+        labels = fcluster(linkage_matrix, n_clusters, criterion='maxclust') - 1
+
+        # Generate colors
+        colors = plt.cm.tab10(np.linspace(0, 1, n_clusters))
+
+        return labels, colors
+
 
 class PhotometryData:
     """Class to store and manage photometry data"""
@@ -187,8 +355,11 @@ class PhotometryViewer:
             Directory containing science images
         """
         self.phot_data = PhotometryData()
+        self.trend_analyzer = TrendAnalyzer()
         self.current_tile = None
         self.current_image_type = 'dss'  # 'dss' or dataset name
+        self.current_analysis_method = 'None'
+        self.n_clusters = 3
         self.selected_source = None
 
         # Load data
@@ -265,12 +436,21 @@ class PhotometryViewer:
 
         # Add image selector (radio buttons)
         image_options = ['DSS (Reference)'] + self.datasets
-        ax_radio_img = plt.axes([0.01, 0.15, 0.12, 0.25])
+        ax_radio_img = plt.axes([0.01, 0.25, 0.12, 0.20])
         self.radio_img = RadioButtons(ax_radio_img, image_options, active=0)
         self.radio_img.on_clicked(self.on_image_changed)
         # Add label
         ax_radio_img.text(0.5, 1.05, 'Select Image:', transform=ax_radio_img.transAxes,
-                         ha='center', fontsize=10, fontweight='bold')
+                         ha='center', fontsize=9, fontweight='bold')
+
+        # Add analysis method selector (radio buttons)
+        analysis_options = list(self.trend_analyzer.methods.keys())
+        ax_radio_analysis = plt.axes([0.01, 0.08, 0.12, 0.15])
+        self.radio_analysis = RadioButtons(ax_radio_analysis, analysis_options, active=0)
+        self.radio_analysis.on_clicked(self.on_analysis_changed)
+        # Add label
+        ax_radio_analysis.text(0.5, 1.1, 'Trend Analysis:', transform=ax_radio_analysis.transAxes,
+                         ha='center', fontsize=9, fontweight='bold')
 
         # Add button for showing all sources
         ax_button = plt.axes([0.4, 0.01, 0.2, 0.04])
@@ -342,6 +522,12 @@ class PhotometryViewer:
 
         # Update display
         self.display_reference_image()
+
+    def on_analysis_changed(self, label):
+        """Handle analysis method change"""
+        self.current_analysis_method = label
+        print(f"\nAnalysis method changed to: {label}")
+        print(f"  {self.trend_analyzer.methods[label]}")
 
     def on_click(self, event):
         """Handle mouse click on image"""
@@ -420,12 +606,13 @@ class PhotometryViewer:
         self.fig.canvas.draw()
 
     def show_all_sources(self, event=None):
-        """Show all sources' light curves in a new window"""
+        """Show all sources' light curves in a new window with classification"""
         if not self.current_tile or not self.phot_data.datasets:
             print("No data to display")
             return
 
         print("\nGenerating all sources plot...")
+        print(f"Analysis method: {self.current_analysis_method}")
 
         # Get all sources from first dataset
         first_dataset = sorted(self.phot_data.datasets.keys())[0]
@@ -438,46 +625,89 @@ class PhotometryViewer:
 
         print(f"Processing {n_sources} sources...")
 
-        # Create new figure
-        fig_all = plt.figure(figsize=(14, 8))
-        fig_all.canvas.manager.set_window_title('All Sources Light Curves')
-
-        # Create subplots
-        ax_flux_all = fig_all.add_subplot(211)
-        ax_mag_all = fig_all.add_subplot(212)
-
         # Get dataset names
         dataset_names = sorted(self.phot_data.datasets.keys())
         n_datasets = len(dataset_names)
         x_indices = range(n_datasets)
 
-        # Plot each source
-        n_plotted = 0
-        n_skipped = 0
-        for i, source in enumerate(sources):
+        # Collect all light curves
+        all_light_curves = []
+        valid_sources = []
+        for source in sources:
             light_curve = self.phot_data.get_light_curve(
                 source['x'], source['y'], self.current_tile
             )
-
-            # Only plot if we have data for all datasets
+            # Only include if we have data for all datasets
             if light_curve and len(light_curve) == n_datasets:
                 fluxes = [lc['flux'] for lc in light_curve]
-                mags = [lc['mag'] for lc in light_curve]
+                all_light_curves.append(fluxes)
+                valid_sources.append(source)
 
-                # Plot with transparency
-                ax_flux_all.plot(x_indices, fluxes, 'o-', alpha=0.3, linewidth=0.5, markersize=2)
-                ax_mag_all.plot(x_indices, mags, 'o-', alpha=0.3, linewidth=0.5, markersize=2)
-                n_plotted += 1
-            else:
-                n_skipped += 1
+        n_plotted = len(all_light_curves)
+        n_skipped = n_sources - n_plotted
+
+        if n_plotted == 0:
+            print("No sources with complete data found")
+            return
+
+        # Perform trend analysis
+        print(f"Performing {self.current_analysis_method} analysis...")
+        labels, colors = self.trend_analyzer.analyze(
+            all_light_curves,
+            method=self.current_analysis_method,
+            n_clusters=self.n_clusters
+        )
+
+        # Count sources in each class
+        unique_labels = np.unique(labels)
+        n_classes = len(unique_labels)
+        print(f"Classification complete: {n_classes} classes found")
+        for label in unique_labels:
+            count = np.sum(labels == label)
+            print(f"  Class {label}: {count} sources")
+
+        # Create new figure
+        fig_all = plt.figure(figsize=(16, 9))
+        fig_all.canvas.manager.set_window_title('All Sources Light Curves - Classified')
+
+        # Create subplots with legend space
+        ax_flux_all = fig_all.add_subplot(211)
+        ax_mag_all = fig_all.add_subplot(212)
+
+        # Plot each source with its class color
+        for i, (fluxes, source) in enumerate(zip(all_light_curves, valid_sources)):
+            label_idx = labels[i]
+            color = colors[label_idx] if isinstance(colors[label_idx], str) else colors[label_idx]
+
+            # Get magnitudes
+            light_curve = self.phot_data.get_light_curve(
+                source['x'], source['y'], self.current_tile
+            )
+            mags = [lc['mag'] for lc in light_curve]
+
+            # Plot with class-specific color
+            ax_flux_all.plot(x_indices, fluxes, 'o-', color=color,
+                           alpha=0.4, linewidth=0.8, markersize=3)
+            ax_mag_all.plot(x_indices, mags, 'o-', color=color,
+                          alpha=0.4, linewidth=0.8, markersize=3)
+
+        # Add legend for classes
+        from matplotlib.patches import Patch
+        legend_elements = []
+        for label in unique_labels:
+            color = colors[label] if isinstance(colors[label], str) else colors[label]
+            count = np.sum(labels == label)
+            legend_elements.append(Patch(facecolor=color, label=f'Class {label} ({count})'))
+
+        ax_flux_all.legend(handles=legend_elements, loc='upper right', fontsize=9)
 
         # Format flux plot
         ax_flux_all.set_ylabel('Flux', fontsize=12)
         title = f'All Sources Light Curves - {self.current_tile}\n'
-        title += f'({n_plotted} sources with complete data'
+        title += f'Method: {self.current_analysis_method} | '
+        title += f'{n_plotted} sources, {n_classes} classes'
         if n_skipped > 0:
-            title += f', {n_skipped} skipped due to incomplete data'
-        title += ')'
+            title += f' | {n_skipped} skipped'
         ax_flux_all.set_title(title, fontsize=13, fontweight='bold')
         ax_flux_all.grid(True, alpha=0.3)
         ax_flux_all.set_xticks(x_indices)
