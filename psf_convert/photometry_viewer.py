@@ -458,9 +458,22 @@ class PhotometryViewer:
                          ha='center', fontsize=9, fontweight='bold')
 
         # Add button for showing all sources
-        ax_button = plt.axes([0.4, 0.01, 0.2, 0.04])
+        ax_button = plt.axes([0.35, 0.01, 0.15, 0.04])
         self.btn_all = Button(ax_button, 'Show All Sources')
         self.btn_all.on_clicked(self.show_all_sources)
+
+        # Add buttons for adjusting cluster number
+        ax_button_minus = plt.axes([0.52, 0.01, 0.05, 0.04])
+        self.btn_minus = Button(ax_button_minus, '-')
+        self.btn_minus.on_clicked(self.decrease_clusters)
+
+        ax_button_plus = plt.axes([0.58, 0.01, 0.05, 0.04])
+        self.btn_plus = Button(ax_button_plus, '+')
+        self.btn_plus.on_clicked(self.increase_clusters)
+
+        # Add text to show current cluster number
+        self.cluster_text = self.fig.text(0.65, 0.03, f'Clusters: {self.n_clusters}',
+                                          fontsize=10, ha='left')
 
 
     def display_reference_image(self):
@@ -533,6 +546,22 @@ class PhotometryViewer:
         self.current_analysis_method = label
         print(f"\nAnalysis method changed to: {label}")
         print(f"  {self.trend_analyzer.methods[label]}")
+
+    def decrease_clusters(self, event):
+        """Decrease number of clusters"""
+        if self.n_clusters > 2:
+            self.n_clusters -= 1
+            self.cluster_text.set_text(f'Clusters: {self.n_clusters}')
+            self.fig.canvas.draw()
+            print(f"\nCluster number decreased to: {self.n_clusters}")
+
+    def increase_clusters(self, event):
+        """Increase number of clusters"""
+        if self.n_clusters < 10:
+            self.n_clusters += 1
+            self.cluster_text.set_text(f'Clusters: {self.n_clusters}')
+            self.fig.canvas.draw()
+            print(f"\nCluster number increased to: {self.n_clusters}")
 
     def on_click(self, event):
         """Handle mouse click on image"""
@@ -672,24 +701,30 @@ class PhotometryViewer:
             return
 
         # Print data summary
+        print(f"Data summary:")
+        print(f"  Total sources: {n_plotted}")
+        print(f"  Complete data (4 points): {n_plotted - n_incomplete}")
+        print(f"  Incomplete data (filled with 0): {n_incomplete}")
         if n_incomplete > 0:
-            print(f"Note: {n_incomplete} sources have incomplete data (filled with 0)")
+            print(f"  Incomplete source indices: {incomplete_indices[:10]}{'...' if len(incomplete_indices) > 10 else ''}")
 
         # Perform trend analysis
-        print(f"Performing {self.current_analysis_method} analysis...")
+        print(f"\nPerforming {self.current_analysis_method} analysis with {self.n_clusters} clusters...")
         labels, colors = self.trend_analyzer.analyze(
             all_light_curves,
             method=self.current_analysis_method,
             n_clusters=self.n_clusters
         )
 
-        # Count sources in each class
+        # Count sources in each class and check incomplete distribution
         unique_labels = np.unique(labels)
         n_classes = len(unique_labels)
         print(f"Classification complete: {n_classes} classes found")
         for label in unique_labels:
             count = np.sum(labels == label)
-            print(f"  Class {label}: {count} sources")
+            # Count how many incomplete sources in this class
+            incomplete_in_class = sum(1 for idx in incomplete_indices if labels[idx] == label)
+            print(f"  Class {label}: {count} sources ({incomplete_in_class} incomplete)")
 
         # Create new figure
         fig_all = plt.figure(figsize=(16, 9))
