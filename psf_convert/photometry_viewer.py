@@ -49,6 +49,129 @@ class TrendAnalyzer:
             'DTW': 'Dynamic Time Warping clustering'
         }
 
+    def estimate_optimal_clusters(self, light_curves, method='silhouette', max_clusters=10):
+        """
+        Estimate optimal number of clusters
+
+        Parameters:
+        -----------
+        light_curves : list of arrays
+            List of light curves
+        method : str
+            Method to use: 'silhouette', 'elbow', or 'gap'
+        max_clusters : int
+            Maximum number of clusters to test
+
+        Returns:
+        --------
+        optimal_k : int
+            Estimated optimal number of clusters
+        """
+        if len(light_curves) < 4:
+            return 2
+
+        data = np.array(light_curves)
+        scaler = StandardScaler()
+        data_scaled = scaler.fit_transform(data)
+
+        max_k = min(max_clusters, len(light_curves) - 1)
+
+        if method == 'silhouette':
+            return self._silhouette_method(data_scaled, max_k)
+        elif method == 'elbow':
+            return self._elbow_method(data_scaled, max_k)
+        elif method == 'gap':
+            return self._gap_statistic(data_scaled, max_k)
+        else:
+            return 3  # Default
+
+    def _silhouette_method(self, data, max_k):
+        """Use silhouette score to find optimal k"""
+        from sklearn.metrics import silhouette_score
+
+        silhouette_scores = []
+        k_range = range(2, max_k + 1)
+
+        for k in k_range:
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+            labels = kmeans.fit_predict(data)
+            score = silhouette_score(data, labels)
+            silhouette_scores.append(score)
+
+        # Find k with highest silhouette score
+        optimal_idx = np.argmax(silhouette_scores)
+        optimal_k = k_range[optimal_idx]
+
+        print(f"  Silhouette scores: {[f'{s:.3f}' for s in silhouette_scores]}")
+        print(f"  Optimal k by silhouette: {optimal_k} (score: {silhouette_scores[optimal_idx]:.3f})")
+
+        return optimal_k
+
+    def _elbow_method(self, data, max_k):
+        """Use elbow method (inertia) to find optimal k"""
+        inertias = []
+        k_range = range(2, max_k + 1)
+
+        for k in k_range:
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+            kmeans.fit(data)
+            inertias.append(kmeans.inertia_)
+
+        # Find elbow point using second derivative
+        if len(inertias) < 3:
+            return 2
+
+        # Calculate rate of change
+        deltas = np.diff(inertias)
+        second_deltas = np.diff(deltas)
+
+        # Find point where second derivative is maximum (sharpest bend)
+        elbow_idx = np.argmax(np.abs(second_deltas)) + 2  # +2 because of two diff operations
+        optimal_k = k_range[min(elbow_idx, len(k_range) - 1)]
+
+        print(f"  Inertias: {[f'{i:.1f}' for i in inertias]}")
+        print(f"  Optimal k by elbow: {optimal_k}")
+
+        return optimal_k
+
+    def _gap_statistic(self, data, max_k):
+        """Use gap statistic to find optimal k"""
+        n_refs = 10  # Number of reference datasets
+        gaps = []
+        k_range = range(2, max_k + 1)
+
+        for k in k_range:
+            # Cluster original data
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+            kmeans.fit(data)
+            orig_disp = kmeans.inertia_
+
+            # Generate reference datasets and cluster them
+            ref_disps = []
+            for _ in range(n_refs):
+                # Generate random data with same bounds
+                random_data = np.random.uniform(
+                    low=data.min(axis=0),
+                    high=data.max(axis=0),
+                    size=data.shape
+                )
+                kmeans_ref = KMeans(n_clusters=k, random_state=42, n_init=10)
+                kmeans_ref.fit(random_data)
+                ref_disps.append(kmeans_ref.inertia_)
+
+            # Calculate gap
+            gap = np.log(np.mean(ref_disps)) - np.log(orig_disp)
+            gaps.append(gap)
+
+        # Find k where gap is maximum
+        optimal_idx = np.argmax(gaps)
+        optimal_k = k_range[optimal_idx]
+
+        print(f"  Gap statistics: {[f'{g:.3f}' for g in gaps]}")
+        print(f"  Optimal k by gap: {optimal_k} (gap: {gaps[optimal_idx]:.3f})")
+
+        return optimal_k
+
     def analyze(self, light_curves, method='None', n_clusters=3):
         """
         Analyze light curves and return classification labels
@@ -365,6 +488,8 @@ class PhotometryViewer:
         self.current_image_type = 'dss'  # 'dss' or dataset name
         self.current_analysis_method = 'None'
         self.n_clusters = 3
+        self.auto_clusters = False  # Whether to auto-determine cluster number
+        self.cluster_method = 'silhouette'  # Method for auto-clustering
         self.selected_source = None
 
         # Load data
@@ -458,21 +583,26 @@ class PhotometryViewer:
                          ha='center', fontsize=9, fontweight='bold')
 
         # Add button for showing all sources
-        ax_button = plt.axes([0.35, 0.01, 0.15, 0.04])
+        ax_button = plt.axes([0.30, 0.01, 0.12, 0.04])
         self.btn_all = Button(ax_button, 'Show All Sources')
         self.btn_all.on_clicked(self.show_all_sources)
 
         # Add buttons for adjusting cluster number
-        ax_button_minus = plt.axes([0.52, 0.01, 0.05, 0.04])
+        ax_button_minus = plt.axes([0.44, 0.01, 0.04, 0.04])
         self.btn_minus = Button(ax_button_minus, '-')
         self.btn_minus.on_clicked(self.decrease_clusters)
 
-        ax_button_plus = plt.axes([0.58, 0.01, 0.05, 0.04])
+        ax_button_plus = plt.axes([0.49, 0.01, 0.04, 0.04])
         self.btn_plus = Button(ax_button_plus, '+')
         self.btn_plus.on_clicked(self.increase_clusters)
 
+        # Add auto cluster button
+        ax_button_auto = plt.axes([0.54, 0.01, 0.08, 0.04])
+        self.btn_auto = Button(ax_button_auto, 'Auto')
+        self.btn_auto.on_clicked(self.toggle_auto_clusters)
+
         # Add text to show current cluster number
-        self.cluster_text = self.fig.text(0.65, 0.03, f'Clusters: {self.n_clusters}',
+        self.cluster_text = self.fig.text(0.63, 0.03, f'Clusters: {self.n_clusters}',
                                           fontsize=10, ha='left')
 
 
@@ -550,6 +680,7 @@ class PhotometryViewer:
     def decrease_clusters(self, event):
         """Decrease number of clusters"""
         if self.n_clusters > 2:
+            self.auto_clusters = False
             self.n_clusters -= 1
             self.cluster_text.set_text(f'Clusters: {self.n_clusters}')
             self.fig.canvas.draw()
@@ -558,10 +689,22 @@ class PhotometryViewer:
     def increase_clusters(self, event):
         """Increase number of clusters"""
         if self.n_clusters < 10:
+            self.auto_clusters = False
             self.n_clusters += 1
             self.cluster_text.set_text(f'Clusters: {self.n_clusters}')
             self.fig.canvas.draw()
             print(f"\nCluster number increased to: {self.n_clusters}")
+
+    def toggle_auto_clusters(self, event):
+        """Toggle automatic cluster number determination"""
+        self.auto_clusters = not self.auto_clusters
+        if self.auto_clusters:
+            self.cluster_text.set_text(f'Clusters: Auto')
+            print(f"\nAuto cluster mode enabled (using {self.cluster_method} method)")
+        else:
+            self.cluster_text.set_text(f'Clusters: {self.n_clusters}')
+            print(f"\nAuto cluster mode disabled (using {self.n_clusters} clusters)")
+        self.fig.canvas.draw()
 
     def on_click(self, event):
         """Handle mouse click on image"""
@@ -708,12 +851,26 @@ class PhotometryViewer:
         if n_incomplete > 0:
             print(f"  Incomplete source indices: {incomplete_indices[:10]}{'...' if len(incomplete_indices) > 10 else ''}")
 
+        # Determine number of clusters
+        if self.auto_clusters:
+            print(f"\nAuto-determining optimal number of clusters using {self.cluster_method} method...")
+            optimal_k = self.trend_analyzer.estimate_optimal_clusters(
+                all_light_curves,
+                method=self.cluster_method,
+                max_clusters=min(10, n_plotted - 1)
+            )
+            actual_n_clusters = optimal_k
+            print(f"  Using {actual_n_clusters} clusters")
+        else:
+            actual_n_clusters = self.n_clusters
+            print(f"\nUsing manual cluster setting: {actual_n_clusters} clusters")
+
         # Perform trend analysis
-        print(f"\nPerforming {self.current_analysis_method} analysis with {self.n_clusters} clusters...")
+        print(f"\nPerforming {self.current_analysis_method} analysis...")
         labels, colors = self.trend_analyzer.analyze(
             all_light_curves,
             method=self.current_analysis_method,
-            n_clusters=self.n_clusters
+            n_clusters=actual_n_clusters
         )
 
         # Count sources in each class and check incomplete distribution
@@ -779,7 +936,10 @@ class PhotometryViewer:
         ax_flux_all.set_ylabel('Flux', fontsize=12)
         title = f'All Sources Light Curves - {self.current_tile}\n'
         title += f'Method: {self.current_analysis_method} | '
-        title += f'{n_plotted} sources, {n_classes} classes'
+        if self.auto_clusters:
+            title += f'{n_plotted} sources, {n_classes} classes (auto)'
+        else:
+            title += f'{n_plotted} sources, {n_classes} classes'
         if n_incomplete > 0:
             title += f' | {n_incomplete} incomplete (dashed)'
         if n_skipped > 0:
