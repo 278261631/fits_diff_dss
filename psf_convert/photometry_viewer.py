@@ -9,6 +9,11 @@ import sys
 import numpy as np
 from pathlib import Path
 from PIL import Image
+
+# Set matplotlib backend to display in separate window (not PyCharm Plots panel)
+import matplotlib
+matplotlib.use('TkAgg')  # Use TkAgg backend for interactive window
+
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Button, RadioButtons
 import warnings
