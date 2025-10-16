@@ -638,22 +638,42 @@ class PhotometryViewer:
         # Collect all light curves
         all_light_curves = []
         valid_sources = []
-        for source in sources:
+        incomplete_indices = []  # Track which sources have incomplete data
+
+        for idx, source in enumerate(sources):
             light_curve = self.phot_data.get_light_curve(
                 source['x'], source['y'], self.current_tile
             )
-            # Only include if we have data for all datasets
-            if light_curve and len(light_curve) == n_datasets:
-                fluxes = [lc['flux'] for lc in light_curve]
+
+            if light_curve and len(light_curve) > 0:
+                # Create flux array with 0 for missing data
+                fluxes = []
+                dataset_dict = {lc['dataset']: lc['flux'] for lc in light_curve}
+
+                for dataset_name in dataset_names:
+                    if dataset_name in dataset_dict:
+                        fluxes.append(dataset_dict[dataset_name])
+                    else:
+                        fluxes.append(0)  # Fill missing data with 0
+
                 all_light_curves.append(fluxes)
                 valid_sources.append(source)
 
+                # Track if this source has incomplete data
+                if len(light_curve) < n_datasets:
+                    incomplete_indices.append(len(valid_sources) - 1)
+
         n_plotted = len(all_light_curves)
         n_skipped = n_sources - n_plotted
+        n_incomplete = len(incomplete_indices)
 
         if n_plotted == 0:
-            print("No sources with complete data found")
+            print("No sources found")
             return
+
+        # Print data summary
+        if n_incomplete > 0:
+            print(f"Note: {n_incomplete} sources have incomplete data (filled with 0)")
 
         # Perform trend analysis
         print(f"Performing {self.current_analysis_method} analysis...")
@@ -684,17 +704,31 @@ class PhotometryViewer:
             label_idx = labels[i]
             color = colors[label_idx] if isinstance(colors[label_idx], str) else colors[label_idx]
 
-            # Get magnitudes
+            # Get magnitudes (with 0 for missing data)
             light_curve = self.phot_data.get_light_curve(
                 source['x'], source['y'], self.current_tile
             )
-            mags = [lc['mag'] for lc in light_curve]
+            dataset_dict = {lc['dataset']: lc['mag'] for lc in light_curve}
+            mags = []
+            for dataset_name in dataset_names:
+                if dataset_name in dataset_dict:
+                    mags.append(dataset_dict[dataset_name])
+                else:
+                    mags.append(0)  # Fill missing magnitude with 0
 
-            # Plot with class-specific color
-            ax_flux_all.plot(x_indices, fluxes, 'o-', color=color,
-                           alpha=0.4, linewidth=0.8, markersize=3)
-            ax_mag_all.plot(x_indices, mags, 'o-', color=color,
-                          alpha=0.4, linewidth=0.8, markersize=3)
+            # Use different style for incomplete data
+            if i in incomplete_indices:
+                # Incomplete data: dashed line, lower alpha
+                ax_flux_all.plot(x_indices, fluxes, 'o--', color=color,
+                               alpha=0.3, linewidth=0.6, markersize=2)
+                ax_mag_all.plot(x_indices, mags, 'o--', color=color,
+                              alpha=0.3, linewidth=0.6, markersize=2)
+            else:
+                # Complete data: solid line
+                ax_flux_all.plot(x_indices, fluxes, 'o-', color=color,
+                               alpha=0.4, linewidth=0.8, markersize=3)
+                ax_mag_all.plot(x_indices, mags, 'o-', color=color,
+                              alpha=0.4, linewidth=0.8, markersize=3)
 
         # Add legend for classes
         from matplotlib.patches import Patch
@@ -711,6 +745,8 @@ class PhotometryViewer:
         title = f'All Sources Light Curves - {self.current_tile}\n'
         title += f'Method: {self.current_analysis_method} | '
         title += f'{n_plotted} sources, {n_classes} classes'
+        if n_incomplete > 0:
+            title += f' | {n_incomplete} incomplete (dashed)'
         if n_skipped > 0:
             title += f' | {n_skipped} skipped'
         ax_flux_all.set_title(title, fontsize=13, fontweight='bold')
@@ -728,9 +764,11 @@ class PhotometryViewer:
 
         fig_all.tight_layout()
 
-        print(f"✓ Plotted {n_plotted} sources with complete light curves")
+        print(f"✓ Plotted {n_plotted} sources")
+        if n_incomplete > 0:
+            print(f"  {n_incomplete} sources with incomplete data (shown as dashed lines, missing values filled with 0)")
         if n_skipped > 0:
-            print(f"  Skipped {n_skipped} sources with incomplete data")
+            print(f"  {n_skipped} sources skipped (no data)")
         print("Close the window to return to main viewer")
 
         plt.show()
