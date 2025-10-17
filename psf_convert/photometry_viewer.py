@@ -630,6 +630,9 @@ class PhotometryViewer:
         self.auto_clusters = False  # Whether to auto-determine cluster number
         self.cluster_method = 'silhouette'  # Method for auto-clustering
         self.selected_source = None
+        self.cluster_labels = {}  # Store cluster labels for each tile: {tile: labels}
+        self.cluster_colors = {}  # Store cluster colors for each tile: {tile: colors}
+        self.cluster_sources = {}  # Store source coordinates for each tile: {tile: [(x, y), ...]}
 
         # Load data
         print("Loading data...")
@@ -741,16 +744,21 @@ class PhotometryViewer:
         self.btn_auto.on_clicked(self.toggle_auto_clusters)
 
         # Add text to show current cluster number
-        self.cluster_text = self.fig.text(0.63, 0.03, f'Clusters: {self.n_clusters}',
+        self.cluster_text = self.fig.text(0.70, 0.03, f'Clusters: {self.n_clusters}',
                                           fontsize=10, ha='left')
 
+        # Add quick cluster button
+        ax_button_cluster = plt.axes([0.63, 0.01, 0.10, 0.04])
+        self.btn_cluster = Button(ax_button_cluster, 'Cluster (5)')
+        self.btn_cluster.on_clicked(self.quick_cluster)
+
         # Add previous/next image buttons
-        ax_button_prev = plt.axes([0.75, 0.01, 0.10, 0.04])
-        self.btn_prev = Button(ax_button_prev, 'Previous Image')
+        ax_button_prev = plt.axes([0.80, 0.01, 0.08, 0.04])
+        self.btn_prev = Button(ax_button_prev, 'Prev')
         self.btn_prev.on_clicked(self.previous_image)
 
-        ax_button_next = plt.axes([0.86, 0.01, 0.10, 0.04])
-        self.btn_next = Button(ax_button_next, 'Next Image')
+        ax_button_next = plt.axes([0.89, 0.01, 0.08, 0.04])
+        self.btn_next = Button(ax_button_next, 'Next')
         self.btn_next.on_clicked(self.next_image)
 
 
@@ -788,8 +796,45 @@ class PhotometryViewer:
                 sources = self.phot_data.datasets[source_dataset][self.current_tile]
                 x_coords = [s['x'] for s in sources]
                 y_coords = [s['y'] for s in sources]
-                self.ax_image.scatter(x_coords, y_coords, c='red', s=50, alpha=0.5,
-                                     marker='o', facecolors='none', edgecolors='red', linewidths=1)
+
+                # Check if we have cluster colors for this tile
+                if (self.current_tile in self.cluster_labels and
+                    self.current_tile in self.cluster_colors and
+                    self.current_tile in self.cluster_sources):
+                    # Use cluster colors
+                    labels = self.cluster_labels[self.current_tile]
+                    colors = self.cluster_colors[self.current_tile]
+                    cluster_coords = self.cluster_sources[self.current_tile]
+
+                    # Create a mapping from coordinates to cluster labels
+                    coord_to_label = {}
+                    for idx, (cx, cy) in enumerate(cluster_coords):
+                        coord_to_label[(cx, cy)] = labels[idx]
+
+                    # Plot each source with its cluster color
+                    for x, y in zip(x_coords, y_coords):
+                        # Find matching cluster label (with tolerance for coordinate differences)
+                        matched_label = None
+                        min_dist = float('inf')
+
+                        for (cx, cy), label in coord_to_label.items():
+                            dist = np.sqrt((x - cx)**2 + (y - cy)**2)
+                            if dist < min_dist and dist < 5.0:  # Within 5 pixels
+                                min_dist = dist
+                                matched_label = label
+
+                        if matched_label is not None:
+                            color = colors[matched_label]
+                            self.ax_image.scatter(x, y, c=[color], s=50, alpha=0.7,
+                                                marker='o', facecolors='none', edgecolors=[color], linewidths=2)
+                        else:
+                            # Source not in clustering (fallback to red)
+                            self.ax_image.scatter(x, y, c='red', s=50, alpha=0.5,
+                                                marker='o', facecolors='none', edgecolors='red', linewidths=1)
+                else:
+                    # Default red color
+                    self.ax_image.scatter(x_coords, y_coords, c='red', s=50, alpha=0.5,
+                                         marker='o', facecolors='none', edgecolors='red', linewidths=1)
 
         self.ax_image.set_xlabel('X (pixels)', fontsize=10)
         self.ax_image.set_ylabel('Y (pixels)', fontsize=10)
@@ -911,6 +956,94 @@ class PhotometryViewer:
             self.cluster_text.set_text(f'Clusters: {self.n_clusters}')
             print(f"\nAuto cluster mode disabled (using {self.n_clusters} clusters)")
         self.fig.canvas.draw()
+
+    def quick_cluster(self, event):
+        """Quick clustering with 5 clusters using Correlation method"""
+        if not self.current_tile:
+            print("\nNo tile selected!")
+            return
+
+        print("\n" + "="*80)
+        print("Quick Clustering Analysis (5 clusters, Correlation method)")
+        print("="*80)
+
+        # Get all light curves for current tile
+        light_curves = []
+        source_coords = []  # Store (x, y) coordinates
+
+        first_dataset = sorted(self.phot_data.datasets.keys())[0]
+        if first_dataset not in self.phot_data.datasets:
+            print("No data available!")
+            return
+
+        if self.current_tile not in self.phot_data.datasets[first_dataset]:
+            print(f"No data for tile {self.current_tile}!")
+            return
+
+        sources = self.phot_data.datasets[first_dataset][self.current_tile]
+
+        # Get expected number of time points
+        n_datasets = len(self.phot_data.datasets)
+        dataset_names = sorted(self.phot_data.datasets.keys())
+
+        for i, source in enumerate(sources):
+            light_curve = self.phot_data.get_light_curve(source['x'], source['y'], self.current_tile)
+
+            # Create a flux array with zeros for missing data
+            fluxes = []
+            lc_dict = {lc['dataset']: lc['flux'] for lc in light_curve}
+
+            for dataset_name in dataset_names:
+                if dataset_name in lc_dict:
+                    fluxes.append(lc_dict[dataset_name])
+                else:
+                    # Fill missing data with 0
+                    fluxes.append(0.0)
+
+            # Include all sources (with zero-padding if needed)
+            if len(light_curve) >= 1:  # At least one measurement
+                light_curves.append(fluxes)
+                source_coords.append((source['x'], source['y']))
+
+        if len(light_curves) < 5:
+            print(f"Not enough sources (found {len(light_curves)}, need at least 5)")
+            return
+
+        # Count complete vs padded sources
+        complete_count = sum(1 for lc in light_curves if all(f != 0 for f in lc))
+        padded_count = len(light_curves) - complete_count
+
+        print(f"Analyzing {len(light_curves)} sources with {n_datasets} time points each...")
+        print(f"  Complete light curves: {complete_count}")
+        print(f"  Zero-padded light curves: {padded_count}")
+
+        # Perform clustering with 5 clusters using Correlation method
+        try:
+            labels, colors = self.trend_analyzer.analyze(light_curves, method='Correlation', n_clusters=5)
+
+            # Store results with source coordinates
+            self.cluster_labels[self.current_tile] = labels
+            self.cluster_colors[self.current_tile] = colors
+            self.cluster_sources[self.current_tile] = source_coords
+
+            # Print results
+            print(f"\nClustering complete!")
+            print(f"Cluster distribution:")
+            for cluster_id in range(5):
+                count = np.sum(labels == cluster_id)
+                percentage = (count / len(labels)) * 100
+                print(f"  Cluster {cluster_id}: {count} sources ({percentage:.1f}%)")
+
+            # Update display
+            self.display_reference_image()
+
+            print("\nImage markers updated with cluster colors!")
+            print("="*80)
+
+        except Exception as e:
+            print(f"Error during clustering: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     def on_click(self, event):
         """Handle mouse click on image"""
