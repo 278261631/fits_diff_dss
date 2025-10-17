@@ -1172,31 +1172,49 @@ class PhotometryViewer:
             print('No light curve data found for this source')
 
     def display_light_curve(self, light_curve):
-        """Display light curve"""
+        """Display light curve with zero-padding for missing data"""
         self.ax_flux.clear()
         self.ax_mag.clear()
 
-        datasets = [lc['dataset'] for lc in light_curve]
-        fluxes = [lc['flux'] for lc in light_curve]
-        mags = [lc['mag'] for lc in light_curve]
+        # Get all dataset names (sorted)
+        all_datasets = sorted(self.phot_data.datasets.keys())
+
+        # Create dictionary from light curve data
+        lc_dict = {lc['dataset']: {'flux': lc['flux'], 'mag': lc['mag']} for lc in light_curve}
+
+        # Build complete arrays with zero-padding for missing data
+        fluxes = []
+        mags = []
+        for dataset_name in all_datasets:
+            if dataset_name in lc_dict:
+                fluxes.append(lc_dict[dataset_name]['flux'])
+                mags.append(lc_dict[dataset_name]['mag'])
+            else:
+                # Fill missing data with 0
+                fluxes.append(0.0)
+                mags.append(0.0)
+
+        # Get source coordinates from first available measurement
+        source_x = light_curve[0]["x"]
+        source_y = light_curve[0]["y"]
 
         # Plot flux
-        self.ax_flux.plot(range(len(datasets)), fluxes, 'o-', color='blue', markersize=8, linewidth=2)
+        self.ax_flux.plot(range(len(all_datasets)), fluxes, 'o-', color='blue', markersize=8, linewidth=2)
         self.ax_flux.set_ylabel('Flux', fontsize=11)
-        self.ax_flux.set_title(f'Source at ({light_curve[0]["x"]:.1f}, {light_curve[0]["y"]:.1f})',
+        self.ax_flux.set_title(f'Source at ({source_x:.1f}, {source_y:.1f})',
                               fontsize=11)
         self.ax_flux.grid(True, alpha=0.3)
-        self.ax_flux.set_xticks(range(len(datasets)))
+        self.ax_flux.set_xticks(range(len(all_datasets)))
         self.ax_flux.set_xticklabels([])
 
         # Plot magnitude
-        self.ax_mag.plot(range(len(datasets)), mags, 'o-', color='red', markersize=8, linewidth=2)
+        self.ax_mag.plot(range(len(all_datasets)), mags, 'o-', color='red', markersize=8, linewidth=2)
         self.ax_mag.set_xlabel('Dataset', fontsize=11)
         self.ax_mag.set_ylabel('Magnitude', fontsize=11)
         self.ax_mag.invert_yaxis()
         self.ax_mag.grid(True, alpha=0.3)
-        self.ax_mag.set_xticks(range(len(datasets)))
-        self.ax_mag.set_xticklabels(datasets, rotation=45, ha='right', fontsize=9)
+        self.ax_mag.set_xticks(range(len(all_datasets)))
+        self.ax_mag.set_xticklabels(all_datasets, rotation=45, ha='right', fontsize=9)
 
         self.fig.canvas.draw()
 
