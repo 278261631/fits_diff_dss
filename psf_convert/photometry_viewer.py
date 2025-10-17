@@ -1016,12 +1016,18 @@ class PhotometryViewer:
             self.cluster_colors[self.current_tile] = cached_colors
             self.cluster_sources[self.current_tile] = cached_coords
 
-            # Print distribution
-            print(f"\nCluster distribution:")
+            # Print distribution (sorted by size)
+            cluster_sizes = []
             for cluster_id in range(5):
                 count = np.sum(cached_labels == cluster_id)
+                cluster_sizes.append((cluster_id, count))
+            cluster_sizes.sort(key=lambda x: x[1], reverse=True)
+
+            print(f"\nCluster distribution (sorted by size):")
+            for rank, (cluster_id, count) in enumerate(cluster_sizes):
                 percentage = (count / len(cached_labels)) * 100
-                print(f"  Cluster {cluster_id}: {count} sources ({percentage:.1f}%)")
+                color_name = ['Gray', 'Light-Gray', 'Red', 'Green', 'Yellow'][rank]
+                print(f"  Cluster {cluster_id}: {count} sources ({percentage:.1f}%) - {color_name}")
 
             print(f"\nImage markers updated with cluster colors!")
             print("="*80)
@@ -1084,21 +1090,44 @@ class PhotometryViewer:
         try:
             labels, colors = self.trend_analyzer.analyze(light_curves, method='DTW-Shape', n_clusters=5)
 
+            # Reassign colors based on cluster size (large clusters get dim colors, small get bright)
+            cluster_sizes = []
+            for cluster_id in range(5):
+                count = np.sum(labels == cluster_id)
+                cluster_sizes.append((cluster_id, count))
+
+            # Sort by size (descending)
+            cluster_sizes.sort(key=lambda x: x[1], reverse=True)
+
+            # Define fixed color scheme: dim colors for large clusters, bright for small
+            fixed_colors = [
+                [0.7, 0.7, 0.7, 1.0],    # Gray (for largest cluster)
+                [0.8, 0.8, 0.6, 1.0],    # Light yellow-gray (for 2nd largest)
+                [1.0, 0.0, 0.0, 1.0],    # Red (for 3rd)
+                [0.0, 1.0, 0.0, 1.0],    # Green (for 4th)
+                [1.0, 1.0, 0.0, 1.0]     # Yellow (for smallest)
+            ]
+
+            # Create mapping from old cluster ID to new color
+            new_colors = np.zeros((5, 4))
+            for rank, (cluster_id, count) in enumerate(cluster_sizes):
+                new_colors[cluster_id] = fixed_colors[rank]
+
             # Store results with source coordinates
             self.cluster_labels[self.current_tile] = labels
-            self.cluster_colors[self.current_tile] = colors
+            self.cluster_colors[self.current_tile] = new_colors
             self.cluster_sources[self.current_tile] = source_coords
 
             # Save results to cache
-            self._save_cluster_results(self.current_tile, labels, colors, source_coords)
+            self._save_cluster_results(self.current_tile, labels, new_colors, source_coords)
 
-            # Print results
+            # Print results (sorted by size)
             print(f"\nClustering complete!")
-            print(f"Cluster distribution:")
-            for cluster_id in range(5):
-                count = np.sum(labels == cluster_id)
+            print(f"Cluster distribution (sorted by size):")
+            for rank, (cluster_id, count) in enumerate(cluster_sizes):
                 percentage = (count / len(labels)) * 100
-                print(f"  Cluster {cluster_id}: {count} sources ({percentage:.1f}%)")
+                color_name = ['Gray', 'Light-Gray', 'Red', 'Green', 'Yellow'][rank]
+                print(f"  Cluster {cluster_id}: {count} sources ({percentage:.1f}%) - {color_name}")
 
             # Update display
             self.display_reference_image()
