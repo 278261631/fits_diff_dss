@@ -9,6 +9,8 @@ import sys
 import numpy as np
 from pathlib import Path
 from PIL import Image
+import pickle
+import json
 
 # Set matplotlib backend to display in separate window (not PyCharm Plots panel)
 import matplotlib
@@ -634,6 +636,11 @@ class PhotometryViewer:
         self.cluster_colors = {}  # Store cluster colors for each tile: {tile: colors}
         self.cluster_sources = {}  # Store source coordinates for each tile: {tile: [(x, y), ...]}
 
+        # Cluster cache directory
+        self.output_dir = Path(output_dir)
+        self.cluster_cache_dir = self.output_dir / 'cluster_cache'
+        self.cluster_cache_dir.mkdir(exist_ok=True)
+
         # Load data
         print("Loading data...")
         success = self.phot_data.load_all_data(output_dir, ref_image_dir, sci_image_dir)
@@ -957,6 +964,40 @@ class PhotometryViewer:
             print(f"\nAuto cluster mode disabled (using {self.n_clusters} clusters)")
         self.fig.canvas.draw()
 
+    def _get_cluster_cache_path(self, tile):
+        """Get the cache file path for a tile's cluster results"""
+        return self.cluster_cache_dir / f'{tile}_cluster5_dtw_shape.pkl'
+
+    def _save_cluster_results(self, tile, labels, colors, source_coords):
+        """Save cluster results to cache"""
+        cache_file = self._get_cluster_cache_path(tile)
+        cache_data = {
+            'labels': labels,
+            'colors': colors,
+            'source_coords': source_coords,
+            'method': 'DTW-Shape',
+            'n_clusters': 5
+        }
+        try:
+            with open(cache_file, 'wb') as f:
+                pickle.dump(cache_data, f)
+            print(f"Cluster results saved to: {cache_file}")
+        except Exception as e:
+            print(f"Warning: Failed to save cluster results: {e}")
+
+    def _load_cluster_results(self, tile):
+        """Load cluster results from cache if available"""
+        cache_file = self._get_cluster_cache_path(tile)
+        if cache_file.exists():
+            try:
+                with open(cache_file, 'rb') as f:
+                    cache_data = pickle.load(f)
+                return cache_data['labels'], cache_data['colors'], cache_data['source_coords']
+            except Exception as e:
+                print(f"Warning: Failed to load cluster results: {e}")
+                return None, None, None
+        return None, None, None
+
     def quick_cluster(self, event):
         """Quick clustering with 5 clusters using DTW-Shape method"""
         if not self.current_tile:
@@ -966,6 +1007,28 @@ class PhotometryViewer:
         print("\n" + "="*80)
         print("Quick Clustering Analysis (5 clusters, DTW-Shape method)")
         print("="*80)
+
+        # Try to load cached results first
+        cached_labels, cached_colors, cached_coords = self._load_cluster_results(self.current_tile)
+        if cached_labels is not None:
+            print(f"Loading cached cluster results for tile {self.current_tile}...")
+            self.cluster_labels[self.current_tile] = cached_labels
+            self.cluster_colors[self.current_tile] = cached_colors
+            self.cluster_sources[self.current_tile] = cached_coords
+
+            # Print distribution
+            print(f"\nCluster distribution:")
+            for cluster_id in range(5):
+                count = np.sum(cached_labels == cluster_id)
+                percentage = (count / len(cached_labels)) * 100
+                print(f"  Cluster {cluster_id}: {count} sources ({percentage:.1f}%)")
+
+            print(f"\nImage markers updated with cluster colors!")
+            print("="*80)
+
+            # Update display
+            self.display_reference_image()
+            return
 
         # Get all light curves for current tile
         light_curves = []
@@ -1025,6 +1088,9 @@ class PhotometryViewer:
             self.cluster_labels[self.current_tile] = labels
             self.cluster_colors[self.current_tile] = colors
             self.cluster_sources[self.current_tile] = source_coords
+
+            # Save results to cache
+            self._save_cluster_results(self.current_tile, labels, colors, source_coords)
 
             # Print results
             print(f"\nClustering complete!")
