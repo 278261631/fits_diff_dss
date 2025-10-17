@@ -738,21 +738,24 @@ class PhotometryViewer:
 
         # Add tile selector (radio buttons) if multiple tiles
         if len(self.tiles) > 1:
-            # Create tile labels with cluster indicator
+            # Create tile labels with cluster indicator (using icon)
             tile_labels = []
             for tile in self.tiles:
                 cache_file = self._get_cluster_cache_path(tile)
                 if cache_file.exists():
-                    tile_labels.append(f"{tile} [C]")
+                    tile_labels.append(f"{tile} ●")  # Use filled circle as indicator
                 else:
                     tile_labels.append(tile)
 
-            ax_radio_tile = plt.axes([0.01, 0.5, 0.12, 0.15])
-            self.radio_tile = RadioButtons(ax_radio_tile, tile_labels, active=0)
+            self.ax_radio_tile = plt.axes([0.01, 0.5, 0.12, 0.15])
+            self.radio_tile = RadioButtons(self.ax_radio_tile, tile_labels, active=0)
             self.radio_tile.on_clicked(self.on_tile_changed)
             # Add label
-            ax_radio_tile.text(0.5, 1.1, 'Select Tile:', transform=ax_radio_tile.transAxes,
+            self.ax_radio_tile.text(0.5, 1.1, 'Select Tile:', transform=self.ax_radio_tile.transAxes,
                          ha='center', fontsize=10, fontweight='bold')
+        else:
+            self.ax_radio_tile = None
+            self.radio_tile = None
 
         # Add image selector (radio buttons)
         image_options = ['DSS (Reference)'] + self.datasets
@@ -892,9 +895,9 @@ class PhotometryViewer:
 
     def on_tile_changed(self, label):
         """Handle tile selection change"""
-        # Remove [C] marker if present
-        if label.endswith(' [C]'):
-            self.current_tile = label[:-4]  # Remove ' [C]'
+        # Remove cluster indicator if present
+        if label.endswith(' ●'):
+            self.current_tile = label[:-2]  # Remove ' ●'
         else:
             self.current_tile = label
 
@@ -1062,6 +1065,45 @@ class PhotometryViewer:
                 return None, None, None
         return None, None, None
 
+    def _update_tile_selector_labels(self):
+        """Update tile selector labels to show cluster indicators"""
+        if self.radio_tile is None or len(self.tiles) <= 1:
+            return
+
+        # Create updated labels with cluster indicators
+        tile_labels = []
+        for tile in self.tiles:
+            cache_file = self._get_cluster_cache_path(tile)
+            if cache_file.exists():
+                tile_labels.append(f"{tile} ●")  # Use filled circle as indicator
+            else:
+                tile_labels.append(tile)
+
+        # Find current selection
+        current_label = self.radio_tile.value_selected
+        if current_label.endswith(' ●'):
+            current_tile = current_label[:-2]
+        else:
+            current_tile = current_label
+
+        # Find new active index
+        try:
+            active_index = self.tiles.index(current_tile)
+        except ValueError:
+            active_index = 0
+
+        # Clear and recreate radio buttons
+        self.ax_radio_tile.clear()
+        self.radio_tile = RadioButtons(self.ax_radio_tile, tile_labels, active=active_index)
+        self.radio_tile.on_clicked(self.on_tile_changed)
+
+        # Re-add label
+        self.ax_radio_tile.text(0.5, 1.1, 'Select Tile:', transform=self.ax_radio_tile.transAxes,
+                         ha='center', fontsize=10, fontweight='bold')
+
+        # Redraw
+        self.fig.canvas.draw_idle()
+
     def quick_cluster(self, event):
         """Quick clustering with 5 clusters using DTW-Shape method"""
         if not self.current_tile:
@@ -1184,6 +1226,9 @@ class PhotometryViewer:
 
             # Save results to cache
             self._save_cluster_results(self.current_tile, labels, new_colors, source_coords)
+
+            # Update tile selector to show cluster indicator
+            self._update_tile_selector_labels()
 
             # Print results (sorted by size)
             print(f"\nClustering complete!")
