@@ -46,7 +46,10 @@ class TrendAnalyzer:
             'Clustering': 'Hierarchical clustering',
             'PCA': 'Principal Component Analysis',
             'Change Point': 'Change point detection',
-            'DTW': 'Dynamic Time Warping clustering'
+            'DTW': 'Dynamic Time Warping clustering',
+            'DTW-Shape': 'DTW with shape normalization',
+            'Correlation': 'Correlation-based shape clustering',
+            'Derivative': 'Derivative-based shape clustering'
         }
 
     def estimate_optimal_clusters(self, light_curves, method='silhouette', max_clusters=10):
@@ -209,6 +212,12 @@ class TrendAnalyzer:
             return self._change_point_analysis(data)
         elif method == 'DTW':
             return self._dtw_clustering(data, n_clusters)
+        elif method == 'DTW-Shape':
+            return self._dtw_shape_clustering(data, n_clusters)
+        elif method == 'Correlation':
+            return self._correlation_clustering(data, n_clusters)
+        elif method == 'Derivative':
+            return self._derivative_clustering(data, n_clusters)
         else:
             return np.zeros(n_sources, dtype=int), ['blue']
 
@@ -303,6 +312,135 @@ class TrendAnalyzer:
 
         # Perform hierarchical clustering on distance matrix
         linkage_matrix = linkage(dist_matrix, method='average')
+        labels = fcluster(linkage_matrix, n_clusters, criterion='maxclust') - 1
+
+        # Generate colors
+        colors = plt.cm.tab10(np.linspace(0, 1, n_clusters))
+
+        return labels, colors
+
+    def _normalize_shape(self, curve):
+        """
+        Normalize a time series to focus on shape rather than amplitude
+
+        Methods applied:
+        1. Z-score normalization (zero mean, unit variance)
+        2. Min-max scaling to [0, 1] range
+
+        Parameters:
+        -----------
+        curve : array
+            Input time series
+
+        Returns:
+        --------
+        normalized : array
+            Shape-normalized time series
+        """
+        curve = np.array(curve, dtype=float)
+
+        # Remove mean and scale to unit variance (z-score)
+        mean = np.mean(curve)
+        std = np.std(curve)
+        if std > 0:
+            normalized = (curve - mean) / std
+        else:
+            normalized = curve - mean
+
+        # Additional min-max scaling to [0, 1]
+        min_val = np.min(normalized)
+        max_val = np.max(normalized)
+        if max_val > min_val:
+            normalized = (normalized - min_val) / (max_val - min_val)
+
+        return normalized
+
+    def _dtw_shape_clustering(self, data, n_clusters):
+        """
+        DTW-based clustering with shape normalization
+        This reduces sensitivity to amplitude and focuses on shape
+        """
+        if not DTW_AVAILABLE:
+            print("DTW library not available, using correlation clustering instead")
+            return self._correlation_clustering(data, n_clusters)
+
+        n_sources = len(data)
+
+        # Normalize each curve to focus on shape
+        print("  Normalizing curves for shape-based comparison...")
+        data_normalized = np.array([self._normalize_shape(curve) for curve in data])
+
+        # Calculate DTW distance matrix on normalized data
+        dist_matrix = np.zeros((n_sources, n_sources))
+        for i in range(n_sources):
+            for j in range(i+1, n_sources):
+                distance = dtw.distance(data_normalized[i], data_normalized[j])
+                dist_matrix[i, j] = distance
+                dist_matrix[j, i] = distance
+
+        # Perform hierarchical clustering on distance matrix
+        linkage_matrix = linkage(dist_matrix, method='average')
+        labels = fcluster(linkage_matrix, n_clusters, criterion='maxclust') - 1
+
+        # Generate colors
+        colors = plt.cm.tab10(np.linspace(0, 1, n_clusters))
+
+        return labels, colors
+
+    def _correlation_clustering(self, data, n_clusters):
+        """
+        Correlation-based shape clustering
+        Uses Pearson correlation as similarity measure (shape-focused)
+        """
+        n_sources = len(data)
+
+        # Calculate correlation distance matrix
+        # Correlation distance = 1 - abs(correlation)
+        dist_matrix = np.zeros((n_sources, n_sources))
+
+        for i in range(n_sources):
+            for j in range(i+1, n_sources):
+                # Pearson correlation coefficient
+                corr = np.corrcoef(data[i], data[j])[0, 1]
+                # Use 1 - |correlation| as distance (focuses on shape similarity)
+                distance = 1 - np.abs(corr)
+                dist_matrix[i, j] = distance
+                dist_matrix[j, i] = distance
+
+        # Perform hierarchical clustering
+        linkage_matrix = linkage(dist_matrix, method='average')
+        labels = fcluster(linkage_matrix, n_clusters, criterion='maxclust') - 1
+
+        # Generate colors
+        colors = plt.cm.tab10(np.linspace(0, 1, n_clusters))
+
+        return labels, colors
+
+    def _derivative_clustering(self, data, n_clusters):
+        """
+        Derivative-based shape clustering
+        Clusters based on rate of change patterns (shape dynamics)
+        """
+        n_sources = len(data)
+
+        # Calculate derivatives (rate of change) for each curve
+        derivatives = []
+        for curve in data:
+            # First derivative (rate of change)
+            deriv = np.diff(curve)
+            # Normalize derivative
+            if np.std(deriv) > 0:
+                deriv = (deriv - np.mean(deriv)) / np.std(deriv)
+            derivatives.append(deriv)
+
+        derivatives = np.array(derivatives)
+
+        # Standardize derivative data
+        scaler = StandardScaler()
+        derivatives_scaled = scaler.fit_transform(derivatives)
+
+        # Perform hierarchical clustering on derivatives
+        linkage_matrix = linkage(derivatives_scaled, method='ward')
         labels = fcluster(linkage_matrix, n_clusters, criterion='maxclust') - 1
 
         # Generate colors
