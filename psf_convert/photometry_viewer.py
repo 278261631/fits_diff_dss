@@ -1026,7 +1026,7 @@ class PhotometryViewer:
             print(f"\nCluster distribution (sorted by size):")
             for rank, (cluster_id, count) in enumerate(cluster_sizes):
                 percentage = (count / len(cached_labels)) * 100
-                color_name = ['Gray', 'Light-Gray', 'Red', 'Green', 'Yellow'][rank]
+                color_name = ['Gray', 'Light-Gray', 'Red', 'Dark-Green', 'Orange'][rank]
                 print(f"  Cluster {cluster_id}: {count} sources ({percentage:.1f}%) - {color_name}")
 
             print(f"\nImage markers updated with cluster colors!")
@@ -1104,8 +1104,8 @@ class PhotometryViewer:
                 [0.7, 0.7, 0.7, 1.0],    # Gray (for largest cluster)
                 [0.8, 0.8, 0.6, 1.0],    # Light yellow-gray (for 2nd largest)
                 [1.0, 0.0, 0.0, 1.0],    # Red (for 3rd)
-                [0.0, 1.0, 0.0, 1.0],    # Green (for 4th)
-                [1.0, 1.0, 0.0, 1.0]     # Yellow (for smallest)
+                [0.0, 0.5, 0.0, 1.0],    # Dark green (for 4th)
+                [1.0, 0.6, 0.0, 1.0]     # Orange (for smallest)
             ]
 
             # Create mapping from old cluster ID to new color
@@ -1126,7 +1126,7 @@ class PhotometryViewer:
             print(f"Cluster distribution (sorted by size):")
             for rank, (cluster_id, count) in enumerate(cluster_sizes):
                 percentage = (count / len(labels)) * 100
-                color_name = ['Gray', 'Light-Gray', 'Red', 'Green', 'Yellow'][rank]
+                color_name = ['Gray', 'Light-Gray', 'Red', 'Dark-Green', 'Orange'][rank]
                 print(f"  Cluster {cluster_id}: {count} sources ({percentage:.1f}%) - {color_name}")
 
             # Update display
@@ -1167,12 +1167,12 @@ class PhotometryViewer:
         )
 
         if light_curve:
-            self.display_light_curve(light_curve)
+            self.display_light_curve(light_curve, source['x'], source['y'])
         else:
             print('No light curve data found for this source')
 
-    def display_light_curve(self, light_curve):
-        """Display light curve with zero-padding for missing data"""
+    def display_light_curve(self, light_curve, source_x=None, source_y=None):
+        """Display light curve with zero-padding for missing data and cluster colors"""
         self.ax_flux.clear()
         self.ax_mag.clear()
 
@@ -1194,21 +1194,53 @@ class PhotometryViewer:
                 fluxes.append(0.0)
                 mags.append(0.0)
 
-        # Get source coordinates from first available measurement
-        source_x = light_curve[0]["x"]
-        source_y = light_curve[0]["y"]
+        # Get source coordinates
+        if source_x is None or source_y is None:
+            source_x = light_curve[0]["x"]
+            source_y = light_curve[0]["y"]
 
-        # Plot flux
-        self.ax_flux.plot(range(len(all_datasets)), fluxes, 'o-', color='blue', markersize=8, linewidth=2)
+        # Determine plot colors based on cluster information
+        flux_color = 'blue'
+        mag_color = 'red'
+        cluster_info = ""
+
+        # Check if we have cluster information for this tile
+        if (self.current_tile in self.cluster_labels and
+            self.current_tile in self.cluster_colors and
+            self.current_tile in self.cluster_sources):
+
+            labels = self.cluster_labels[self.current_tile]
+            colors = self.cluster_colors[self.current_tile]
+            cluster_coords = self.cluster_sources[self.current_tile]
+
+            # Find matching cluster label (with tolerance for coordinate differences)
+            matched_label = None
+            min_dist = float('inf')
+
+            for idx, (cx, cy) in enumerate(cluster_coords):
+                dist = np.sqrt((source_x - cx)**2 + (source_y - cy)**2)
+                if dist < min_dist and dist < 5.0:  # Within 5 pixels
+                    min_dist = dist
+                    matched_label = labels[idx]
+
+            if matched_label is not None:
+                # Use cluster color
+                cluster_color = colors[matched_label]
+                flux_color = cluster_color
+                mag_color = cluster_color
+                cluster_info = f" [Cluster {matched_label}]"
+
+        # Plot flux (with dashed line to distinguish from magnitude)
+        self.ax_flux.plot(range(len(all_datasets)), fluxes, 'o--', color=flux_color, markersize=8, linewidth=2)
         self.ax_flux.set_ylabel('Flux', fontsize=11)
-        self.ax_flux.set_title(f'Source at ({source_x:.1f}, {source_y:.1f})',
+        self.ax_flux.set_title(f'Source at ({source_x:.1f}, {source_y:.1f}){cluster_info}',
                               fontsize=11)
         self.ax_flux.grid(True, alpha=0.3)
         self.ax_flux.set_xticks(range(len(all_datasets)))
         self.ax_flux.set_xticklabels([])
 
-        # Plot magnitude
-        self.ax_mag.plot(range(len(all_datasets)), mags, 'o-', color='red', markersize=8, linewidth=2)
+        # Plot magnitude (with solid line)
+        self.ax_mag.plot(range(len(all_datasets)), mags, 'o-', color=mag_color, markersize=8, linewidth=2)
         self.ax_mag.set_xlabel('Dataset', fontsize=11)
         self.ax_mag.set_ylabel('Magnitude', fontsize=11)
         self.ax_mag.invert_yaxis()
