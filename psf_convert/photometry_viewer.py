@@ -669,6 +669,16 @@ class PhotometryViewer:
         n_tiles = len(self.tiles)
         print(f"Loaded {n_datasets} datasets, {n_tiles} tile(s)")
         print(f"Tiles: {', '.join(self.tiles)}")
+
+        # Check for cluster cache files
+        tiles_with_cache = []
+        for tile in self.tiles:
+            cache_file = self._get_cluster_cache_path(tile)
+            if cache_file.exists():
+                tiles_with_cache.append(tile)
+
+        if tiles_with_cache:
+            print(f"Found cluster cache for {len(tiles_with_cache)} tile(s): {', '.join(tiles_with_cache)}")
         print()
 
         # Create figure
@@ -680,6 +690,28 @@ class PhotometryViewer:
 
         # Create UI
         self.create_ui()
+
+        # Auto-load cluster results for first tile if available
+        cached_labels, cached_colors, cached_coords = self._load_cluster_results(self.current_tile)
+        if cached_labels is not None:
+            print(f"Auto-loading cluster results for tile {self.current_tile}...")
+            self.cluster_labels[self.current_tile] = cached_labels
+            self.cluster_colors[self.current_tile] = cached_colors
+            self.cluster_sources[self.current_tile] = cached_coords
+
+            # Print brief summary
+            cluster_sizes = []
+            for cluster_id in range(5):
+                count = np.sum(cached_labels == cluster_id)
+                cluster_sizes.append((cluster_id, count))
+            cluster_sizes.sort(key=lambda x: x[1], reverse=True)
+
+            print(f"Loaded cluster results: {len(cached_labels)} sources in 5 clusters")
+            print(f"  Largest cluster: {cluster_sizes[0][1]} sources ({cluster_sizes[0][1]/len(cached_labels)*100:.1f}%)")
+            print()
+
+            # Update display to show cluster colors
+            self.display_reference_image()
 
     def create_ui(self):
         """Create user interface"""
@@ -706,8 +738,17 @@ class PhotometryViewer:
 
         # Add tile selector (radio buttons) if multiple tiles
         if len(self.tiles) > 1:
+            # Create tile labels with cluster indicator
+            tile_labels = []
+            for tile in self.tiles:
+                cache_file = self._get_cluster_cache_path(tile)
+                if cache_file.exists():
+                    tile_labels.append(f"{tile} [C]")
+                else:
+                    tile_labels.append(tile)
+
             ax_radio_tile = plt.axes([0.01, 0.5, 0.12, 0.15])
-            self.radio_tile = RadioButtons(ax_radio_tile, self.tiles, active=0)
+            self.radio_tile = RadioButtons(ax_radio_tile, tile_labels, active=0)
             self.radio_tile.on_clicked(self.on_tile_changed)
             # Add label
             ax_radio_tile.text(0.5, 1.1, 'Select Tile:', transform=ax_radio_tile.transAxes,
@@ -851,8 +892,31 @@ class PhotometryViewer:
 
     def on_tile_changed(self, label):
         """Handle tile selection change"""
-        self.current_tile = label
+        # Remove [C] marker if present
+        if label.endswith(' [C]'):
+            self.current_tile = label[:-4]  # Remove ' [C]'
+        else:
+            self.current_tile = label
+
         print(f"\nSwitched to tile: {self.current_tile}")
+
+        # Try to auto-load cluster results if available
+        cached_labels, cached_colors, cached_coords = self._load_cluster_results(self.current_tile)
+        if cached_labels is not None:
+            print(f"Auto-loading cluster results for tile {self.current_tile}...")
+            self.cluster_labels[self.current_tile] = cached_labels
+            self.cluster_colors[self.current_tile] = cached_colors
+            self.cluster_sources[self.current_tile] = cached_coords
+
+            # Print brief summary
+            cluster_sizes = []
+            for cluster_id in range(5):
+                count = np.sum(cached_labels == cluster_id)
+                cluster_sizes.append((cluster_id, count))
+            cluster_sizes.sort(key=lambda x: x[1], reverse=True)
+
+            print(f"Loaded cluster results: {len(cached_labels)} sources in 5 clusters")
+            print(f"  Largest cluster: {cluster_sizes[0][1]} sources ({cluster_sizes[0][1]/len(cached_labels)*100:.1f}%)")
 
         # Update display
         self.display_reference_image()
