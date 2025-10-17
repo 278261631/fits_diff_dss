@@ -958,13 +958,13 @@ class PhotometryViewer:
         self.fig.canvas.draw()
 
     def quick_cluster(self, event):
-        """Quick clustering with 5 clusters using Correlation method"""
+        """Quick clustering with 5 clusters using DTW-Shape method"""
         if not self.current_tile:
             print("\nNo tile selected!")
             return
 
         print("\n" + "="*80)
-        print("Quick Clustering Analysis (5 clusters, Correlation method)")
+        print("Quick Clustering Analysis (5 clusters, DTW-Shape method)")
         print("="*80)
 
         # Get all light curves for current tile
@@ -1017,9 +1017,9 @@ class PhotometryViewer:
         print(f"  Complete light curves: {complete_count}")
         print(f"  Zero-padded light curves: {padded_count}")
 
-        # Perform clustering with 5 clusters using Correlation method
+        # Perform clustering with 5 clusters using DTW-Shape method
         try:
-            labels, colors = self.trend_analyzer.analyze(light_curves, method='Correlation', n_clusters=5)
+            labels, colors = self.trend_analyzer.analyze(light_curves, method='DTW-Shape', n_clusters=5)
 
             # Store results with source coordinates
             self.cluster_labels[self.current_tile] = labels
