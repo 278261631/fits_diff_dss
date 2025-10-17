@@ -624,6 +624,7 @@ class PhotometryViewer:
         self.trend_analyzer = TrendAnalyzer()
         self.current_tile = None
         self.current_image_type = 'dss'  # 'dss' or dataset name
+        self.current_dataset_index = -1  # -1 for DSS, 0+ for datasets
         self.current_analysis_method = 'None'
         self.n_clusters = 3
         self.auto_clusters = False  # Whether to auto-determine cluster number
@@ -743,6 +744,15 @@ class PhotometryViewer:
         self.cluster_text = self.fig.text(0.63, 0.03, f'Clusters: {self.n_clusters}',
                                           fontsize=10, ha='left')
 
+        # Add previous/next image buttons
+        ax_button_prev = plt.axes([0.75, 0.01, 0.10, 0.04])
+        self.btn_prev = Button(ax_button_prev, 'Previous Image')
+        self.btn_prev.on_clicked(self.previous_image)
+
+        ax_button_next = plt.axes([0.86, 0.01, 0.10, 0.04])
+        self.btn_next = Button(ax_button_next, 'Next Image')
+        self.btn_next.on_clicked(self.next_image)
+
 
     def display_reference_image(self):
         """Display current image (DSS or science) with sources"""
@@ -801,10 +811,68 @@ class PhotometryViewer:
         """Handle image selection change"""
         if label == 'DSS (Reference)':
             self.current_image_type = 'dss'
+            self.current_dataset_index = -1
             print(f"\nSwitched to DSS reference image")
         else:
             self.current_image_type = label
+            self.current_dataset_index = self.datasets.index(label)
             print(f"\nSwitched to {label} image")
+
+        # Update display
+        self.display_reference_image()
+
+    def previous_image(self, event):
+        """Switch to previous image in the sequence"""
+        # Calculate previous index
+        new_index = self.current_dataset_index - 1
+
+        # Wrap around: if at DSS (-1), go to last dataset
+        if new_index < -1:
+            new_index = len(self.datasets) - 1
+
+        # Update current image
+        if new_index == -1:
+            self.current_image_type = 'dss'
+            self.current_dataset_index = -1
+            print(f"\nSwitched to DSS reference image")
+        else:
+            self.current_image_type = self.datasets[new_index]
+            self.current_dataset_index = new_index
+            print(f"\nSwitched to {self.current_image_type} image")
+
+        # Update radio button selection
+        if new_index == -1:
+            self.radio_img.set_active(0)
+        else:
+            self.radio_img.set_active(new_index + 1)
+
+        # Update display
+        self.display_reference_image()
+
+    def next_image(self, event):
+        """Switch to next image in the sequence"""
+        # Calculate next index
+        new_index = self.current_dataset_index + 1
+
+        # Wrap around: if past last dataset, go to DSS
+        if new_index >= len(self.datasets):
+            new_index = -1
+
+        # Update current image
+        if new_index == -1:
+            self.current_image_type = 'dss'
+            self.current_dataset_index = -1
+            print(f"\nSwitched to DSS reference image")
+        else:
+            self.current_image_type = self.datasets[new_index]
+            self.current_dataset_index = new_index
+            print(f"\nSwitched to {self.current_image_type} image")
+
+        # Update radio button selection
+        if new_index == -1:
+            self.radio_img.set_active(0)
+        else:
+            self.radio_img.set_active(new_index + 1)
 
         # Update display
         self.display_reference_image()
